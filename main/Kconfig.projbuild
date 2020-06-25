@@ -1,0 +1,178 @@
+menu "Webserver configuration"
+
+config RESET_GPIO
+    int "\"Back to defaults\" GPIO number"
+	range 0 34
+	default 3
+	help
+		GPIO number (IOxx) to reset setup to defaults.
+
+		Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to reset.
+
+		GPIOs 35-39 are input-only so cannot be used as outputs.
+
+config WIFI_MODE
+    bool "WiFi mode"
+        default false
+        help
+                WiFi mode "0" = Access point mode, "1" = WiFi station mode, connects to selected WiFi
+
+config AP_SSID
+    string "Access point SSID"
+        default "MotoGym"
+        help
+                Name of access point WiFi (SSID) [32].
+
+config AP_PASS
+    string "Access point password"
+        default ""
+        help
+                Password of access point WiFi [64].
+
+config AP_CHANNEL
+    int "Default Channel Nr"
+        range 1 14
+        default 1
+        help
+                Channel of ESP32 soft-AP
+
+                China, channel range [1, 14]
+                Japan, channel range [1, 14]
+                USA, channel range [1, 11]
+                Europe, channel range [1, 13]
+
+choice AP_AUTHMODE
+    prompt "Access point auth mode"
+    default AP_AUTHMODE_OPEN
+    help
+        Auth mode of ESP32 soft-AP. Do not support AUTH_WEP in soft-AP mode
+
+config AP_AUTHMODE_OPEN
+    bool "Autorification mode Opened"
+
+config AP_AUTHMODE_WEP
+    bool "Autorification mode WEP"
+
+config AP_AUTHMODE_WPA_PSK
+    bool "Autorification mode WPA PSK"
+
+config AP_AUTHMODE_WPA2_PSK
+    bool "Autorification mode WPA2 PSK"
+
+config AP_AUTHMODE_WPA_WPA2_PSK
+    bool "Autorification mode WPA WPA2 PSK"
+
+config AP_AUTHMODE_MAX
+    bool "Autorification mode MAX"
+
+endchoice
+
+config AP_AUTHMODE
+    int
+    default WIFI_AUTH_OPEN if AP_AUTHMODE_OPEN
+    default WIFI_AUTH_WEP if AP_AUTHMODE_WEP
+    default WIFI_AUTH_WPA_PSK if AP_AUTHMODE_WPA_PSK
+    default WIFI_AUTH_WPA2_PSK if AP_AUTHMODE_WPA2_PSK
+    default WIFI_AUTH_WPA_WPA2_PSK if AP_AUTHMODE_WPA_WPA2_PSK
+    default WIFI_AUTH_MAX if AP_AUTHMODE_MAX
+
+config AP_SSID_HIDDEN
+    bool "SSID hidden"
+        default false
+        help
+                Broadcast SSID or not, default 0, broadcast the SSID
+
+config AP_MAX_CONNECTION
+    int "AP max connections"
+        range 1 4
+        default 4
+        help
+                Access point maximum connections
+
+config AP_BEACON_INTERVAL
+    int "AP beacon interval"
+        range 100 60000
+        default 100
+        help
+                Beacon interval, 100 ~ 60000 ms, default 100 ms
+
+config STA_SSID
+    string "SSID of target AP"
+        default ""
+        help
+                Name (SSID) of target AP.
+
+config STA_PASS
+    string "password of target AP"
+        default ""
+        help
+                password of target AP.
+
+config STA_BSSID_SET
+    bool "Station MAC enable"
+        default false
+        help
+                whether set MAC address of target AP or not. Generally, station_config.bssid_set needs to be 0; and it needs to be 1 only when users need to check the MAC address of the AP.
+
+config STA_BSSID
+    string "Station MAC(BSSID)"
+        default ""
+        help
+                MAC address of target AP
+
+config SPI_MISO_PIN
+    int "SPI MISO pin"
+	range 0 35
+	default 25
+	help
+		GPIO number (IOxx) for MISO pin.
+
+config SPI_MOSI_PIN
+    int "SPI MOSI pin"
+	range 0 35
+	default 23
+	help
+		GPIO number (IOxx) for MOSI pin.
+
+config SPI_CLK_PIN
+    int "SPI CLK pin"
+	range 0 35
+	default 19
+	help
+		GPIO number (IOxx) for CLK pin.
+
+config SPI_CS_PIN
+    int "SPI CS pin"
+	range 0 35
+	default 22
+	help
+		GPIO number (IOxx) for CS pin.
+
+config SPI_DC_PIN
+    int "SPI DC pin"
+	range 0 34
+	default 21
+	help
+		GPIO number (IOxx) for DC pin.
+
+config SPI_CLOCK_HZ
+    int "SPI clk Hz"
+	default 10000000
+	help
+		SPI working frequency.
+
+config SPI_MODE
+    int "SPI mode"
+	range 0 3
+	default 0
+	help
+		SPI working mode.
+
+config SPI_QUEUE_SIZE
+    int "SPI queue size"
+	default 7
+	help
+		SPI queue size.
+
+endmenu
+
