@@ -6,13 +6,11 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_event.h"
-//#include "esp_event_loop.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "freertos/portmacro.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
-//#include "tcpip_adapter.h"
 #include "esp_netif.h"
 #include "fn_defs.h"
 #include "structures.h"
@@ -47,17 +45,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < 5) {
             esp_wifi_connect();
-            //xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP\n");
         }
         ESP_LOGI(TAG,"connect to the AP fail\n");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        // Connected to external AP
-        //ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-	//ESP_LOGI(TAG, "got ip:%s\n",
-        //         ip4addr_ntoa(&event->ip_info.ip));
-
 	ip4_addr_t* event = (ip4_addr_t*) event_data;
         ESP_LOGI(TAG, "got ip:%s\n",
                  ip4addr_ntoa(event));
@@ -119,7 +111,6 @@ static void initialise_wifi(void)
 int app_main(void)
 {
     nvs_flash_init();
-    //system_init();
     sys_init();
     nvs_rw_init();
     readings.len = 0;
