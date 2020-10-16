@@ -60,25 +60,42 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
 static void initialise_wifi(void)
 {
-    tcpip_adapter_init();
+    printf("main: initialise_wifi\n");
+    esp_netif_init();
+    printf("main: initialise_wifi check: esp_event_loop_create_default()\n");
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    tcpip_adapter_ip_info_t ipInfo = {0,};
-    IP4_ADDR(&ipInfo.ip, setup.wifi_conf.ap_ip[0],setup.wifi_conf.ap_ip[1],setup.wifi_conf.ap_ip[2],setup.wifi_conf.ap_ip[3]);
-    IP4_ADDR(&ipInfo.gw, setup.wifi_conf.ap_gw[0],setup.wifi_conf.ap_gw[1],setup.wifi_conf.ap_gw[2],setup.wifi_conf.ap_gw[3]);
-    IP4_ADDR(&ipInfo.netmask, setup.wifi_conf.ap_mask[0],setup.wifi_conf.ap_mask[1],
-                              setup.wifi_conf.ap_mask[2],setup.wifi_conf.ap_mask[3]);
+    if (setup.wifi_conf.wifi_mode){ // 0=Access Point, 1=WiFi station
+	esp_netif_create_default_wifi_sta();
+    }
+    else{
+        esp_netif_t* wifiAP = esp_netif_create_default_wifi_ap();
+        
+        esp_netif_ip_info_t ipInfo;
+        IP4_ADDR(&ipInfo.ip, setup.wifi_conf.ap_ip[0],setup.wifi_conf.ap_ip[1],
+			     setup.wifi_conf.ap_ip[2],setup.wifi_conf.ap_ip[3]);
+        IP4_ADDR(&ipInfo.gw, setup.wifi_conf.ap_gw[0],setup.wifi_conf.ap_gw[1],
+			     setup.wifi_conf.ap_gw[2],setup.wifi_conf.ap_gw[3]);
+        IP4_ADDR(&ipInfo.netmask, setup.wifi_conf.ap_mask[0],setup.wifi_conf.ap_mask[1],
+                                  setup.wifi_conf.ap_mask[2],setup.wifi_conf.ap_mask[3]);
+        esp_netif_dhcps_stop(wifiAP);
+        esp_netif_set_ip_info(wifiAP, &ipInfo);
+        esp_netif_dhcps_start(wifiAP);
 
-    tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
-    tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &ipInfo);
-    tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    printf("main: initialise_wifi check: esp_wifi_init(&cfg)\n");
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+    printf("main: initialise_wifi check: WIFI_EVENT");
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
+			                       &wifi_event_handler, NULL));
+    printf("main: initialise_wifi check: IP_EVENT");
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
+			                       &wifi_event_handler, NULL));
 
+    printf("main: WiFi mode = %d\n", setup.wifi_conf.wifi_mode);
     if (setup.wifi_conf.wifi_mode){ // 0=Access Point, 1=WiFi station
         wifi_config_t wifi_config = {
             .sta = setup.wifi_conf.sta_conf,
@@ -110,9 +127,13 @@ static void initialise_wifi(void)
 
 int app_main(void)
 {
-    nvs_flash_init();
-    sys_init();
-    nvs_rw_init();
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+    //sys_init();
+    //nvs_rw_init();
     readings.len = 0;
     
     gpio_pad_select_gpio(LED_BUILTIN);
