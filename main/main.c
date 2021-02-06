@@ -21,11 +21,14 @@
 #define delay(ms) (vTaskDelay(ms/portTICK_RATE_MS))
 setup_type setup;
 
+#define PART_STR "Main: "
+#define LOG(str, ... ) printf(PART_STR);\
+                       printf(str, ##__VA_ARGS__)	
+
 #include "lwip/sys.h"
 #include "lwip/netdb.h"
 #include "lwip/api.h"
 
-static int s_retry_num = 0;
 static const char *TAG = "wifi";
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -43,26 +46,22 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < 5) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP\n");
-        }
+        esp_wifi_connect();
+        ESP_LOGI(TAG, "retry to connect to the AP\n");
         ESP_LOGI(TAG,"connect to the AP fail\n");
+	setup.wifi_conf.wifi_connected = false;
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
 	ip4_addr_t* event = (ip4_addr_t*) event_data;
         ESP_LOGI(TAG, "got ip:%s\n",
                  ip4addr_ntoa(event));
-        s_retry_num = 0;
-        setup.wifi_conf.save = 7;
+        setup.wifi_conf.wifi_connected = true;
     }
 }
 
 static void initialise_wifi(void)
 {
-    printf("main: initialise_wifi\n");
+    LOG("initialise_wifi\n");
     esp_netif_init();
-    printf("main: initialise_wifi check: esp_event_loop_create_default()\n");
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     if (setup.wifi_conf.wifi_mode){ // 0=Access Point, 1=WiFi station
@@ -85,17 +84,14 @@ static void initialise_wifi(void)
     }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    printf("main: initialise_wifi check: esp_wifi_init(&cfg)\n");
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    printf("main: initialise_wifi check: WIFI_EVENT");
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
 			                       &wifi_event_handler, NULL));
-    printf("main: initialise_wifi check: IP_EVENT");
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
 			                       &wifi_event_handler, NULL));
 
-    printf("main: WiFi mode = %d\n", setup.wifi_conf.wifi_mode);
+    LOG("WiFi mode = %d\n", setup.wifi_conf.wifi_mode);
     if (setup.wifi_conf.wifi_mode){ // 0=Access Point, 1=WiFi station
         wifi_config_t wifi_config = {
             .sta = setup.wifi_conf.sta_conf,
@@ -113,7 +109,7 @@ static void initialise_wifi(void)
             .ap = setup.wifi_conf.ap_conf,
         };
 
-        printf("main: SSID = %s\n", wifi_config.ap.ssid);
+        LOG("SSID = %s\n", wifi_config.ap.ssid);
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
         ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
@@ -121,19 +117,20 @@ static void initialise_wifi(void)
 
         ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s\n",
                  wifi_config.ap.ssid, wifi_config.ap.password);
-        setup.wifi_conf.save = 7;
+        setup.wifi_conf.wifi_connected = true;
     }
 }
 
 int app_main(void)
 {
+    setup.init = false;
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     //sys_init();
-    //nvs_rw_init();
+    nvs_rw_init(&setup);
     readings.len = 0;
     
     gpio_pad_select_gpio(LED_BUILTIN);
@@ -153,18 +150,18 @@ int app_main(void)
 		10, 	      //Priority
 		NULL);	      //Task handle
 
-    printf("main: Waiting for WiFi init\n");
-    //wait untill init data is received
-    while(!setup.wifi_conf.wifi_init){
+    LOG("Waiting for WiFi init\n");
+    //wait untill init data is received. Required, because WiFi reset may be received
+    while(!setup.init){
         delay(1000);
     }
-    printf("main: WiFi init ready\n");
+    LOG("WiFi init ready\n");
     //Now we can init WiFi and start HTTP server
     initialise_wifi();
-    printf("main: Starting HTTP server\n");
+    LOG("Starting HTTP server\n");
     xTaskCreate(&http_server,  //Function
                 "http_server", //Name (for debug)
-                2048,          //Stack deph
+                4096,          //Stack deph
                 &setup,        //Param's to pass to the task
                 5,             //Priority
                 NULL);         //Task handle

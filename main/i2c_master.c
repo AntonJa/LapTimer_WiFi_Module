@@ -48,6 +48,10 @@
 #define ACK_VAL 0x0                 /*!< I2C ack value */
 #define NACK_VAL 0x1                /*!< I2C nack value */
 
+#define PART_STR "I2C: "
+#define LOG(str, ... ) printf(PART_STR);\
+                       printf(str, ##__VA_ARGS__)
+
 static gpio_num_t i2c_gpio_sda = 14;//18;//13;
 static gpio_num_t i2c_gpio_scl = 13;//19;//9;
 static uint32_t i2c_frequency = 100000;
@@ -74,7 +78,7 @@ static esp_err_t i2c_master_init()
 static int do_i2c_read(){
   uint8_t data;
 
-  printf("I2C master read\n");
+  LOG("master read\n");
   for (int i = 0; i<19; i++){
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     data = 0;
@@ -92,7 +96,7 @@ static int do_i2c_read(){
     i2c_cmd_link_delete(cmd);
 
     if (ret == ESP_OK) {
-      printf("%02x ", data);
+      //printf("%02x ", data);
       switch(i){
         case 0:
           ds_conf->bcd_seconds = data;
@@ -206,7 +210,7 @@ static int do_i2c_read(){
           break;
       }
     } else {
-      printf("Err\n");
+      LOG("Err\n");
     }
   }
 
@@ -217,7 +221,7 @@ static int do_i2c_read(){
 static int do_i2c_write(){
   uint8_t data;
 
-  printf("I2C master write\n");
+  LOG("master write\n");
   for (int i = 0; i<19; i++){
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     data = 0;
@@ -327,7 +331,7 @@ static int do_i2c_write(){
     if (ret == ESP_OK) {
       printf("%02x ", data);
     } else {
-      printf("Err\n");
+      LOG("Err\n");
     }
   }
 
@@ -393,7 +397,7 @@ void generate_date_time(){
             ds_conf->bcd_minutes,
             ds_conf->bcd_seconds);
   }
-  printf("%s\n", ds_conf->date_time_ro);
+  LOG("%s\n", ds_conf->date_time_ro);
 }
 
 //Main application
@@ -402,10 +406,10 @@ void i2c_master(void *parSetup){
   ds_conf->i2c_waiting = false;
   ds_conf->i2c_busy = false;
   ds_conf->www_busy = false;
-  printf("I2C master start\n");
+  LOG("master start\n");
   ESP_ERROR_CHECK(i2c_master_init());
   while(1){
-    printf("DS: decidion start\n");
+    LOG("DS: decidion start\n");
     ds_conf->i2c_busy = true;
     while(ds_conf->www_busy){
       ds_conf->i2c_waiting = true;

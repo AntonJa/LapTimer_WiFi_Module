@@ -1,6 +1,142 @@
 #ifndef __HTTP_SERVER_H__
 #define __HTTP_SERVER_H__
 
+const static char http_html_hdr[] =
+    "HTTP/1.1 200 OK\r\nContent-type: text/html\r\n\r\n";
+
+const static char http_csv_hdr[] =
+    "HTTP/1.1 200 OK\r\nContent-type: csv\r\n\r\n";
+
+enum enum_Lang{
+  enum_ru=0,
+  enum_lv=1,
+  enum_en=2
+};
+
+enum enum_Page{
+  enum_main=0,
+  enum_monitor=1,
+  enum_setup=2,
+  enum_modes=21,
+  enum_csv_col=3,
+  enum_csv_coma=4,
+  enum_referee=5,
+  enum_json=6
+};
+
+enum enum_timerStep{
+  enum_timer_start_0=0,
+  enum_timer_start_1=1,
+  enum_timer_start_2=2,
+  enum_timer_start_3=3,
+  enum_timer_start_4=4,
+  enum_timer_start_5=5,
+  enum_timer_start_6=6,
+  enum_timer_start_7=7,
+  enum_timer_start_8=8,
+  enum_timer_start_9=9,
+  enum_timer_stop_0=10,
+  enum_timer_stop_1=11,
+  enum_timer_stop_2=12,
+  enum_timer_stop_3=13,
+  enum_timer_stop_4=14,
+  enum_timer_stop_5=15,
+  enum_timer_stop_6=16,
+  enum_timer_stop_7=17,
+  enum_timer_stop_8=18,
+  enum_timer_stop_9=19
+};
+
+#define setup_modes_str_NR 6
+enum enum_modes_save{
+  enum_modes_mod_lap_gym_1=1,
+  enum_modes_mod_lap_gym_2=2,
+  enum_modes_mod_lap_gym_3=3,
+  enum_modes_mod_bikes_1=4,
+  enum_modes_mod_bikes_2=5,
+  enum_modes_mod_bikes_3=6
+};
+
+const static char *setup_modes_str[] =
+    {"mod_lap_gym_1",
+    "mod_lap_gym_2",
+    "mod_lap_gym_3",
+    "mod_bikes_1",
+    "mod_bikes_2",
+    "mod_bikes_3"};
+
+#define setup_save_str_NR 20
+enum enum_setup_save{
+  enum_setup_ap_ip=1,
+  enum_setup_ap_gw=2,
+  enum_setup_ap_mask=3,
+  enum_setup_ap_ssid=4,
+  enum_setup_ap_password=5,
+  enum_setup_ap_channel=6,
+  enum_setup_ap_authmode=7,
+  enum_setup_ap_con_limit=8,
+  enum_setup_ap_hide_ssid=9,
+  enum_setup_sta_ssid=10,
+  enum_setup_sta_password=11,
+  enum_setup_sta_bssid=12,
+  enum_setup_sta_use_mac=13,
+  enum_setup_ds_seconds=14,
+  enum_setup_ds_minutes=15,
+  enum_setup_ds_hours=16,
+  enum_setup_ds_date=17,
+  enum_setup_ds_month=18,
+  enum_setup_ds_year=19,
+  enum_setup_ds_aging=20
+};
+
+#define separator_coma true
+#define separator_semicolon false
+
+const static char *setup_save_str[] =
+    {"ap_ip",
+    "ap_gw",
+    "ap_mask",
+    "ap_ssid",
+    "ap_password",
+    "ap_channel",
+    "ap_authmode",
+    "ap_con_limit",
+    "ap_hide_ssid",
+    "sta_ssid",
+    "sta_password",
+    "sta_bssid",
+    "sta_use_mac",
+    "ds_sec",
+    "ds_min",
+    "ds_hur",
+    "ds_dat",
+    "ds_mon",
+    "ds_yer",
+    "ds_age"};
+
+typedef struct {
+   enum enum_Lang language;
+   enum enum_Page page;
+   bool mobile;
+} http_state;
+
+#define MOBILE_AGENTS_NR 13
+
+const static char *mobile_agents[] =
+    {"Android",
+    "webOS",
+    "iPhone",
+    "iPad",
+    "iPod",
+    "BlackBerry",
+    "BB",
+    "PlayBook",
+    "IEMobile",
+    "Windows Phone",
+    "Kindle",
+    "Silk",
+    "Opera Mini"};
+
 // define Jquerry, for string selection in referee mode
 #define REF_JSON "/*! jQuery v1.8.3 jquery.com | jquery.org/license */\n"\
 "(function(e,t){function _(e){var t=M[e]={};"\

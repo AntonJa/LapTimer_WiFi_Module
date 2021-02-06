@@ -5,6 +5,16 @@
 
 #define LED_BUILTIN 5
 
+typedef struct timer_mode_conf {
+   bool lap_gym;
+   uint8_t bikes;
+} timer_mode_conf_type;
+
+typedef struct modes_conf {
+   uint8_t save;
+   timer_mode_conf_type mode[3];
+} modes_conf_type;
+
 typedef struct ds3231_conf {
    bool changed;
    bool i2c_busy;
@@ -39,22 +49,31 @@ typedef struct ds3231_conf {
 
 typedef struct reading_str {
    uint16_t id;
+   uint8_t lapGym;
+   uint8_t bykeNr;
+   uint8_t bykes;
    uint32_t value;
    int referee;
 } reading_type;
 
 typedef struct wifi_conf {
-   uint8_t save;
+//   uint8_t save;
    bool wifi_mode;    // 0=Access Point, 1=WiFi station
-   bool wifi_init;    // 0=New, 1=Initialized
+   bool wifi_connected;
 
    //WiFi connection config
    wifi_sta_config_t sta_conf;
 //typedef struct {
 //    uint8_t ssid[32];      /**< SSID of target AP*/
 //    uint8_t password[64];  /**< password of target AP*/
+//    wifi_scan_method_t scan_method;    /**< do all channel scan or fast scan */
 //    bool bssid_set;        /**< whether set MAC address of target AP or not. Generally, station_config.bssid_set needs to be 0; and it needs to be 1 only when users need to check the MAC address of the AP.*/
 //    uint8_t bssid[6];      /**< MAC address of target AP*/
+//    uint8_t channel;       /**< channel of target AP. Set to 1~13 to scan starting from the specified channel before connecting to AP. If the channel of AP is unknown, set it to 0.*/
+//    uint16_t listen_interval;   /**< Listen interval for ESP32 station to receive beacon when WIFI_PS_MAX_MODEM is set. Units: AP beacon intervals. Defaults to 3 if set to 0. */
+//    wifi_sort_method_t sort_method;    /**< sort the connect AP in the list by rssi or security mode */
+//    wifi_scan_threshold_t  threshold;     /**< When sort_method is set, only APs which have an auth mode that is more secure than the selected auth mode and a signal stronger than the minimum RSSI will be used. */
+//    wifi_pmf_config_t pmf_cfg;    /**< Configuration for Protected Management Frame. Will be advertized in RSN Capabilities in RSN IE. */
 //} wifi_sta_config_t;
 
    uint8_t ap_ip[4];
@@ -87,8 +106,11 @@ readings_struct readings;
 reading_type *test[2];
 
 typedef struct setup_conf {
+   bool user_active;
+   bool init; // init done
    ds3231_conf_type ds_conf;
    wifi_conf_type wifi_conf;
+   modes_conf_type modes;
 } setup_type;
 
 

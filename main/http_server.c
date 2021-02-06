@@ -9,189 +9,371 @@
 #include "driver/gpio.h"
 #include "constants.h"
 
-const static char http_html_hdr[] =
-    "HTTP/1.1 200 OK\r\nContent-type: text/html\r\n\r\n";
+#define PART_STR "HTTP: "
+#define LOG(str, ... ) printf(PART_STR);\
+                       printf(str, ##__VA_ARGS__)
 
-const static char http_csv_hdr[] =
-    "HTTP/1.1 200 OK\r\nContent-type: csv\r\n\r\n";
-
-enum enum_Lang{
-  enum_ru=0,
-  enum_lv=1,
-  enum_en=2
-};
-
-enum enum_Page{
-  enum_main=0,
-  enum_monitor=1,
-  enum_setup=2,
-  enum_csv_col=3,
-  enum_csv_coma=4,
-  enum_referee=5,
-  enum_json=6
-};
-
-enum enum_timerStep{
-  enum_timer_start=0,
-  enum_timer_beam_on=1,
-  enum_timer_run=2,
-  enum_timer_end=3,
-  enum_timer_reset=4
-};
-
-#define setup_save_str_NR 22
-
-#define separator_coma true
-#define separator_semicolon false
-
-enum enum_setup_save{
-  enum_setup_ap_ip=1,
-  enum_setup_ap_gw=2,
-  enum_setup_ap_mask=3,
-  enum_setup_ap_ssid=4,
-  enum_setup_ap_password=5,
-  enum_setup_ap_channel=6,
-  enum_setup_ap_authmode=7,
-  enum_setup_ap_con_limit=8,
-  enum_setup_ap_hide_ssid=9,
-  enum_setup_sta_ssid=10,
-  enum_setup_sta_password=11,
-  enum_setup_sta_bssid=12,
-  enum_setup_sta_use_mac=13,
-  enum_setup_ds_seconds=14,
-  enum_setup_ds_minutes=15,
-  enum_setup_ds_hours=16,
-  enum_setup_ds_date=17,
-  enum_setup_ds_month=18,
-  enum_setup_ds_year=19,
-  enum_setup_ds_aging=20
-};
-
-const static char *setup_save_str[] = 
-    {"ap_ip",
-    "ap_gw",
-    "ap_mask",
-    "ap_ssid",
-    "ap_password",
-    "ap_channel",
-    "ap_authmode",
-    "ap_con_limit",
-    "ap_hide_ssid",
-    "sta_ssid",
-    "sta_password",
-    "sta_bssid",
-    "sta_use_mac",
-    "ds_sec",
-    "ds_min",
-    "ds_hur",
-    "ds_dat",
-    "ds_mon",
-    "ds_yer",
-    "ds_age"};
-
-typedef struct {
-   enum enum_Lang language;
-   enum enum_Page page;
-   bool mobile;
-} http_state;
+/*
+ * http_server
+ *  |-> http_server_netconn_serve
+ *       |-> parse_setup
+ *       |-> parse_modes
+ *       |-> generate_ajax
+ *       |-> generate_csv
+ *       |-> generate_html
+ *       |    |-> generate_html_head
+ *       |    |-> generate_html_body_setup
+ *       |    |-> generate_csv
+ *       |    |-> generate_csv
+ *       |    |-> generate_html_body_main
+ */
 
 setup_type *Setup;
 
-#define MOBILE_AGENTS_NR 13
+void parse_modes(char* buf, http_state *state, char *error){
+  bool save_modes_conf = false;
+  error[0] = 0;
+  while(buf[0]!='?')
+    buf++;
+  buf++;//mod_en_1=on&mod_lap_gym_1=lap&mod_bikes_1=4&mod_lap_gym_2=gym&mod_bikes_2=4&mod_bikes_3=4 HTTP/1.1
 
-const static char *mobile_agents[] = 
-    {"Android",
-    "webOS",
-    "iPhone",
-    "iPad",
-    "iPod",
-    "BlackBerry",
-    "BB",
-    "PlayBook",
-    "IEMobile",
-    "Windows Phone",
-    "Kindle",
-    "Silk",
-    "Opera Mini"};
-void append_id(char *result, uint16_t value){
-    while(result[0] != 0) result++;
-    sprintf(result, "%d", value);
-}
-void append_val(char *result, uint32_t value){
-    while(result[0] != 0) result++;
-    int ms = value%1000;
-    int s = (value/1000)%60;
-    int min = (value/60000)%60;
-    int h = value/3600000;
-    if (h>0)
-        sprintf(result, "%d:%d:%d.%03d", h, min, s, ms);
-    else{
-        if (min>0)
-            sprintf(result, "%d:%d.%03d", min, s, ms);
-        else
-            sprintf(result, "%d.%03d", s, ms);
+  while(buf[0] != 0 && buf[0] != ' '){
+    LOG("start modes\n");
+    bool found = false;
+    int id;
+    int cid;
+    for (id = 0; id < setup_modes_str_NR; id++){
+      cid = 0;
+      while (setup_modes_str[id][cid] != 0){
+        if (setup_modes_str[id][cid] != buf[cid])
+          break;
+        cid++;
+      }
+      if(setup_modes_str[id][cid] == 0){
+        found = true;
+        break;
+      }
     }
+
+    if (!found){
+      while(buf[0]!='&')
+        buf++;
+      buf++;
+      continue;
+    }
+
+        buf += cid + 1;// jump after "="
+    switch(id+1){
+      case enum_modes_mod_lap_gym_1://mod_lap_gym_1=lap
+           LOG("mode 0 LapGym\n");
+	   if (buf[0] == 'l' && buf[1] == 'a' && buf[2] == 'p')
+               Setup->modes.mode[0].lap_gym = false;
+           else
+               Setup->modes.mode[0].lap_gym = true;
+           save_modes_conf = true;
+           break;
+      case enum_modes_mod_bikes_1://mod_bikes_1=4
+           LOG("mode 0 bikes\n");
+	   Setup->modes.mode[0].bikes = s2i(buf);
+           save_modes_conf = true;
+           break;
+      case enum_modes_mod_lap_gym_2://mod_lap_gym_2=lap
+           LOG("mode 1 LapGym\n");
+	   if (buf[0] == 'l' && buf[1] == 'a' && buf[2] == 'p')
+               Setup->modes.mode[1].lap_gym = false;
+           else
+               Setup->modes.mode[1].lap_gym = true;
+           save_modes_conf = true;
+           break;
+      case enum_modes_mod_bikes_2://mod_bikes_2=4
+           LOG("mode 1 bikes\n");
+	   Setup->modes.mode[1].bikes = s2i(buf);
+           save_modes_conf = true;
+           break;
+      case enum_modes_mod_lap_gym_3://mod_lap_gym_3=lap
+           LOG("mode 2 LapGym\n");
+	   if (buf[0] == 'l' && buf[1] == 'a' && buf[2] == 'p')
+               Setup->modes.mode[2].lap_gym = false;
+           else
+               Setup->modes.mode[2].lap_gym = true;
+           save_modes_conf = true;
+           break;
+      case enum_modes_mod_bikes_3://mod_bikes_3=4
+           LOG("mode 2 bikes\n");
+	   Setup->modes.mode[2].bikes = s2i(buf);
+           save_modes_conf = true;
+           break;
+      default:
+           break;
+    }
+    while(buf[0]!='&' && buf[0]!=' ')
+      buf++;
+    if (buf[0] == '&')
+      buf++;//mod_lap_gym_1=lap&mod_bikes_1=4&mod_lap_gym_2=gym&mod_bikes_2=4&mod_bikes_3=4 HTTP/1.1
+    LOG("end <%c>\n", buf[0]);
+  }
+  if(save_modes_conf)
+    Setup->modes.save = 1;
 }
+
+void parse_setup(char* buf, http_state *state, char *error){
+  bool save_wifi_conf = false;
+  error[0] = 0;
+  while(buf[0]!='?')
+    buf++;
+  buf++;//type=ap&ip=192.168.0.1&gw=192.168.0.1&mask=255.255.255.0&ssid=MGR&password=12345&channel=5&authmode=open&con_limit=4&ip=0.0.0.0&gw=0.0.0.0&mask=0.0.0.0&ssid=&password=&bssid=0-0-0-0-0-0&dhcp=on&bssid=&bssid=&bssid= HTTP/1.1
+
+  while(buf[0] != 0 && buf[0] != ' '){
+    LOG("start\n");
+    bool found = false;
+    int id;
+    int cid;
+    int i;
+    for (id = 0; id < setup_save_str_NR; id++){
+      cid = 0;
+      while (setup_save_str[id][cid] != 0){
+        if (setup_save_str[id][cid] != buf[cid])
+          break;
+        cid++;
+      }
+      if(setup_save_str[id][cid] == 0){
+        found = true;
+        break;
+      }
+    }
+
+    if (!found){
+      while(buf[0]!='&')
+        buf++;
+      buf++;
+      continue;
+    }
+
+    buf += cid + 1;// jump after "="
+    int year;
+
+    switch(id+1){
+
+      case enum_setup_ap_ip://ap_ip=192.168.0.1
+           decode_ip(Setup->wifi_conf.ap_ip, buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_gw://ap_gw=192.168.0.1
+           decode_ip(Setup->wifi_conf.ap_gw, buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_mask://ap_mask=255.255.255.0
+           decode_ip(Setup->wifi_conf.ap_mask, buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_ssid://ap_ssid=Lap%20timer
+           for (int i = 0; i<32; i++){
+             Setup->wifi_conf.ap_conf.ssid[i] = buf[i];
+             if(buf[i] == '&'){
+               Setup->wifi_conf.ap_conf.ssid[i] = 0;
+               break;
+             }
+           }
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_password://ap_password=12345
+           for (i = 0; i<32; i++){
+             Setup->wifi_conf.ap_conf.password[i] = buf[i];
+             if(buf[i] == '&'){
+               Setup->wifi_conf.ap_conf.password[i] = 0;
+               break;
+             }
+           }
+           if(i<8){
+               switch(state->language){
+                   case enum_lv://012345678901234
+                       strcat(error, "Kļūda: Parolei jābūt vismaz 8 simboliem garai.");
+                       break;
+                   case enum_en:
+                       strcat(error, "Error: password must be at least 8 characters long.");
+                       break;
+                   case enum_ru:
+                       strcat(error, "Ошыбка: пароль должен быть хотябы в 8 символов.");
+                       break;
+               }
+           }
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_channel://ap_channel=5
+           Setup->wifi_conf.ap_conf.channel = s2i(buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_authmode://ap_authmode=open
+           Setup->wifi_conf.ap_conf.authmode = buf[0]-'0';
+           if(Setup->wifi_conf.ap_conf.authmode == 0)
+             error[0] = 0;
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_con_limit://ap_con_limit=4
+           Setup->wifi_conf.ap_conf.max_connection = s2i(buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ap_hide_ssid://ap_hide_ssid=on
+           if (buf[0] == 'o' && buf[1] == 'n')
+             Setup->wifi_conf.ap_conf.ssid_hidden = true;
+           else
+             Setup->wifi_conf.ap_conf.ssid_hidden = false;
+           save_wifi_conf = true;
+           break;
+      case enum_setup_sta_ssid://sta_ssid=
+           for (i = 0; i<32; i++){
+             Setup->wifi_conf.sta_conf.ssid[i] = buf[i];
+             if(buf[i] == '&' || i == 31){
+               Setup->wifi_conf.sta_conf.ssid[i] = 0;
+               break;
+             }
+           }
+           Setup->wifi_conf.sta_conf.bssid_set = false;
+           save_wifi_conf = true;
+           break;
+      case enum_setup_sta_password://sta_password=
+           for (i = 0; i<32; i++){
+             Setup->wifi_conf.sta_conf.password[i] = buf[i];
+             if(buf[i] == '&' || i == 31){
+               Setup->wifi_conf.sta_conf.password[i] = 0;
+               break;
+             }
+           }
+           save_wifi_conf = true;
+           break;
+      case enum_setup_sta_bssid://sta_bssid=0:0:0:0:0:0
+           decode_mac(Setup->wifi_conf.sta_conf.bssid, buf);
+           save_wifi_conf = true;
+           break;
+      case enum_setup_sta_use_mac://sta_use_mac=on
+           if (buf[0] == 'o' && buf[1] == 'n')
+             Setup->wifi_conf.sta_conf.bssid_set = true;
+           LOG("MAC filter ON found\n");
+           save_wifi_conf = true;
+           break;
+      case enum_setup_ds_seconds://ds_sec=
+           LOG("seconds start\n");
+           Setup->ds_conf.www_busy = true;
+           while(Setup->ds_conf.i2c_busy){
+               // check if both was set at one time
+               if(Setup->ds_conf.i2c_waiting){
+                   break;
+               }
+           }
+           Setup->ds_conf.bcd_seconds = s2bcd(buf);
+           LOG("seconds = %02x\n", Setup->ds_conf.bcd_seconds);
+           break;
+      case enum_setup_ds_minutes://ds_min=
+           Setup->ds_conf.bcd_minutes = s2bcd(buf);
+           LOG("minutes = %02x\n", Setup->ds_conf.bcd_minutes);
+           break;
+      case enum_setup_ds_hours://ds_hur=
+           Setup->ds_conf.bcd_hour = s2bcd(buf);
+           LOG("hours = %02x\n", Setup->ds_conf.bcd_hour);
+           break;
+      case enum_setup_ds_date://ds_dat=
+           Setup->ds_conf.bcd_date = s2bcd(buf);
+           LOG("date = %02x\n", Setup->ds_conf.bcd_date);
+           break;
+      case enum_setup_ds_month://ds_mon=
+           Setup->ds_conf.bcd_month = s2bcd(buf);
+           LOG("month = %02x\n", Setup->ds_conf.bcd_month);
+           break;
+      case enum_setup_ds_year://ds_yer=
+           year = s2bcd(buf);
+           if(year > 0x2099)
+               Setup->ds_conf.century = true;
+           else
+               Setup->ds_conf.century = false;
+           Setup->ds_conf.bcd_year = year & 0xff;
+           LOG("year = %02x, century = %d\n", Setup->ds_conf.bcd_year, Setup->ds_conf.century);
+           break;
+      case enum_setup_ds_aging://ds_age=
+           Setup->ds_conf.aging = s2i(buf);
+           LOG("agning = %d\n", Setup->ds_conf.aging);
+           Setup->ds_conf.changed = true;
+           Setup->ds_conf.OSF = false;
+           break;
+      default:
+           break;
+    }
+    while(buf[0]!='&' && buf[0]!=' ')
+      buf++;
+    if (buf[0] == '&')
+      buf++;//ip=192.168.0.1&gw=192.168.0.1&mask=255.255.255.0&ssid=MGR&password=12345&channel=5&authmode=open&con_limit=4&ip=0.0.0.0&gw=0.0.0.0&mask=0.0.0.0&ssid=&password=&bssid=0-0-0-0-0-0&dhcp=on&bssid=&bssid=&bssid= HTTP/1.1
+      LOG("end <%c>\n", buf[0]);
+  }
+  if(save_wifi_conf){
+      nvs_set_wifi_conf();
+      esp_restart();
+  }
+  LOG("time end changed=%d\n", Setup->ds_conf.changed);
+  Setup->ds_conf.www_busy = false;
+}
+
 void generate_ajax(char *ajax, reading_type* list,int len, http_state *state,int8_t timerStep){
-    printf("AJAX: start processing\n");
+    LOG("AJAX: start processing\n");
     if (list == NULL){
         strcpy(ajax, "\n");
         return;
     }
     strcpy(ajax, "<table>\n");
-    printf("AJAX: selecting language %d\n", state->language);
+    LOG("AJAX: selecting language %d\n", state->language);
     switch(state->language){
         case enum_ru:
             strcat(ajax, " <tr>\n"
-                         "  <th name=\"run\">Заезд</th>\n"
+                         "  <th name=\"run\">№</th>\n"
+			 "  <th name=\"type\">Тип</th>\n"
                          "  <th name=\"time\">Время</th>\n"
                          " </tr>\n");
-            if (timerStep >= enum_timer_start && timerStep <= enum_timer_beam_on){
+            if (timerStep >= enum_timer_start_0 && timerStep <= enum_timer_start_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">СTАРТ</td>\n");
+                           "    <td colspan=\"3\">СTАРТ</td>\n");
               strcat(ajax, "  </tr>\n");
             }
-            if (timerStep == enum_timer_run){
+            if (timerStep >= enum_timer_stop_0 && timerStep <= enum_timer_stop_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">ЕДЕТ</td>\n");
+                           "    <td colspan=\"3\">ЖДЁМ</td>\n");
               strcat(ajax, "  </tr>\n");
             }
             break;
         case enum_lv:
             strcat(ajax, " <tr>\n"
-                         "  <th name=\"run\">Brauc.</th>\n"
+                         "  <th name=\"run\">Npk</th>\n"
+                         "  <th name=\"type\">Tips</th>\n"
                          "  <th name=\"time\">Laiks</th>\n"
                          " </tr>\n");
-            if (timerStep >= enum_timer_start && timerStep <= enum_timer_beam_on){
+            if (timerStep >= enum_timer_start_0 && timerStep <= enum_timer_start_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">STARTS</td>\n"
+                           "    <td colspan=\"3\">STARTS</td>\n"
                            "  </tr>\n");
             }
-            if (timerStep == enum_timer_run){
+            if (timerStep >= enum_timer_stop_0 && timerStep <= enum_timer_stop_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">BRAUCIENS</td>\n"
+                           "    <td colspan=\"3\">GAIDAM</td>\n"
                            "  </tr>\n");
             }
             break;
         case enum_en:
             strcat(ajax, " <tr>\n"
-                         "  <th name=\"run\">Run</th>\n"
+                         "  <th name=\"run\">#</th>\n"
+			 "  <th name=\"type\">Type</th>\n"
                          "  <th name=\"time\">Time</th>\n"
                          " </tr>\n");
-            if (timerStep >= enum_timer_start && timerStep <= enum_timer_beam_on){
+            if (timerStep >= enum_timer_start_0 && timerStep <= enum_timer_start_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">START</td>\n"
+                           "    <td colspan=\"3\">START</td>\n"
                            "  </tr>\n");
             }
-            if (timerStep == enum_timer_run){
+            if (timerStep >= enum_timer_stop_0 && timerStep <= enum_timer_stop_9){
               strcat(ajax, "  <tr>\n"
-                           "    <td colspan=\"2\">RUNNING</td>\n"
+                           "    <td colspan=\"3\">WAITING</td>\n"
                            "  </tr>\n");
             }
             break;
     }
     //populate list
-    printf("AJAX: populating list\n");
+    LOG("AJAX: populating list\n");
     int max = len;
     if (len > 30) max = 30;
     for (int i = 0; i<max; i++){
@@ -201,13 +383,25 @@ void generate_ajax(char *ajax, reading_type* list,int len, http_state *state,int
             append_id(ajax, list[i].id);
             strcat(ajax, "</td>\n"
               "    <td>");
+            if(list[i].lapGym == 0)
+              strcat(ajax, "&#10226; ");
+            else
+              strcat(ajax, "<u>&#8630;</u> ");
+            append_id(ajax, list[i].bykeNr);
+	    strcat(ajax, "/");
+	    append_id(ajax, list[i].bykes);
+	    strcat(ajax, "</td>\n"
+              "    <td>");
             if (list[i].referee < 0)
               strcat(ajax, "<s>");
             append_val(ajax, list[i].value);
             if (list[i].referee > 0){
               strcat(ajax, "(+");
-              append_val(ajax, list[i].referee);
-              strcat(ajax, ")");
+              if((list[i].referee % 1000) > 0)
+                append_val(ajax, list[i].referee);
+	      else
+	        append_id(ajax, list[i].referee / 1000);
+	      strcat(ajax, ")");
             }
             if (list[i].referee < 0)
               strcat(ajax, "</s>");
@@ -216,56 +410,68 @@ void generate_ajax(char *ajax, reading_type* list,int len, http_state *state,int
         }
     }
     strcat(ajax, "</table> ");
-    printf("AJAX: ready\n");
+    LOG("AJAX: ready\n");
 }
 
 static void generate_html_head(char *html, int html_len, http_state* state){
     char *P0 = malloc(35);//[35];
     if (P0 == NULL){
-      printf("Error: P0 malloc failed.\n");
+      LOG("Error: P0 malloc failed.\n");
       return;
     }
     P0[0] = 0;
     char *P1 = malloc(35);//[35];
     if (P1 == NULL){
-      printf("Error: P1 malloc failed.\n");
+      LOG("Error: P1 malloc failed.\n");
       free(P0);
       return;
     }
     P1[0] = 0;
     char *P2 = malloc(35);//[35];
     if (P2 == NULL){
-      printf("Error: P2 malloc failed.\n");
+      LOG("Error: P2 malloc failed.\n");
       free(P0);
       free(P1);
       return;
     }
     P2[0] = 0;
-    char *P3 = malloc(35);//[35];
-    if (P3 == NULL){
-      printf("Error: P3 malloc failed.\n");
+    char *P21 = malloc(35);//[35];
+    if (P21 == NULL){
+      LOG("Error: P21 malloc failed.\n");
       free(P0);
       free(P1);
       free(P2);
       return;
     }
-    P3[0] = 0;
-    char *P31 = malloc(95);//[95];
-    if (P31 == NULL){
-      printf("Error: P31 malloc failed.\n");
+    P21[0] = 0;
+    char *P3 = malloc(35);//[35];
+    if (P3 == NULL){
+      LOG("Error: P3 malloc failed.\n");
       free(P0);
       free(P1);
       free(P2);
+      free(P21);
+      return;
+    }
+    P3[0] = 0;
+    char *P31 = malloc(95);//[95];
+    if (P31 == NULL){
+      LOG("Error: P31 malloc failed.\n");
+      free(P0);
+      free(P1);
+      free(P2);
+      free(P21);
       free(P3);
       return;
     }
     P31[0] = 0;
     char *P41 = malloc(95);//[95];
     if (P41 == NULL){
-      printf("Error: P41 malloc failed.\n");
+      LOG("Error: P41 malloc failed.\n");
       free(P0);
       free(P1);
       free(P2);
+      free(P21);
       free(P3);
       free(P31);
       return;
@@ -273,10 +479,11 @@ static void generate_html_head(char *html, int html_len, http_state* state){
     P41[0] = 0;
     char *P5 = malloc(35);//[35];
     if (P5 == NULL){
-      printf("Error: P5 malloc failed.\n");
+      LOG("Error: P5 malloc failed.\n");
       free(P0);
       free(P1);
       free(P2);
+      free(P21);
       free(P3);
       free(P31);
       free(P41);
@@ -288,6 +495,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
     char en[] = "2";
     char eMain[] = "2"; 
     char eSetup[] = "2";
+    char eModes[] = "2";
     //mobile parameters
     char mMain[] = "755px";
     char mTlH[] = " 8";
@@ -318,7 +526,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
         mFormTableW[0] = '7';
         mFormTableW[1] = '3';
         mFormTableW[2] = '9';
-        mTableF[0] = '6';
+        mTableF[0] = '3';
         mMenuW[0] = '2';
         mMenuW[1] = '1';
         mMenuW[2] = '4';
@@ -332,6 +540,9 @@ static void generate_html_head(char *html, int html_len, http_state* state){
         case enum_setup:
             eSetup[0] = '1';
             break;
+	case enum_modes:
+            eModes[0] = '1';
+	    break;
         case enum_monitor:
         case enum_referee:
             mMain[0] = ' ';
@@ -356,6 +567,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
             strcpy(P1,"Monitora režīms");
             strcpy(P5,"Tiesneša režīms");
             strcpy(P2,"Iestat.");
+	    strcpy(P21,"Režīms");
             strcpy(P3,"Ielādēt");
             strcpy(P31,"Formāts: .CSV</br>Sadalītājs: semikols");
             strcpy(P41,"Formāts: .CSV</br>Sadalītājs: komats");
@@ -368,6 +580,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
             strcpy(P1,"Monitor mode");
             strcpy(P5,"Referee mode");
             strcpy(P2,"Setup");
+	    strcpy(P21,"Mode");
             strcpy(P3,"Get data");
             strcpy(P31,"Format: .CSV</br>Separator: semicolon");
             strcpy(P41,"Format: .CSV</br>Separator: comma");
@@ -380,6 +593,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
             strcpy(P1,"Режим монитора");
             strcpy(P5,"Режим судьи");
             strcpy(P2,"Настройка");
+	    strcpy(P21,"Режимы");
             strcpy(P3,"Загрузить");
             strcpy(P31,"Формат: .CSV</br>Разделитель: точка с запятой");
             strcpy(P41,"Формат: .CSV</br>Разделитель: запятая");
@@ -388,6 +602,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
             en[0] = '2';
             break;
     }
+
     strcpy(html, "<!DOCTYPE html>\n"
                  "<html><head>\n"
                  "<meta charset=\"UTF-8\">\n"
@@ -462,6 +677,13 @@ static void generate_html_head(char *html, int html_len, http_state* state){
     strcat(html, "0px;border:solid 1px;font-size:");
     strcat(html, mSetupText);
     strcat(html, "00%;}\n"
+                 "input[type=\"radio\"]{width:");
+    strcat(html, mCheckSize);
+    strcat(html, "0px;height:");
+    strcat(html, mCheckSize);
+    strcat(html, "0px;border:solid 1px;font-size:");
+    strcat(html, mSetupText);
+    strcat(html, "00%;}\n"
                  "table {width:");
     strcat(html, mFormTableW);
     strcat(html, ";float:right;font-size:");
@@ -516,9 +738,9 @@ static void generate_html_head(char *html, int html_len, http_state* state){
                  "   set(\"time\",this.responseText);}};\n"
                  " xhttp2.open(\"GET\",\"clock\",true);\n"
                  " xhttp2.send();\n");
-    if((Setup->wifi_conf.save >= 1) && (Setup->wifi_conf.save <= 5) && state->page == enum_setup){
-        strcat(html, " if(rlds>0)window.location = \"setup\";\n");
-    }
+    //if((Setup->wifi_conf.save >= 1) && (Setup->wifi_conf.save <= 5) && state->page == enum_setup){
+    //    strcat(html, " if(rlds>0)window.location = \"setup\";\n");
+    //}
     strcat(html, " setTimeout(reload, 1000);\n"
                  " rlds=rlds+1;}\n"
                  "function edit(){\n"
@@ -612,6 +834,15 @@ static void generate_html_head(char *html, int html_len, http_state* state){
             strcat(html, (char*)Setup->wifi_conf.sta_conf.ssid);
         else
             strcat(html, (char*)Setup->wifi_conf.ap_conf.ssid);
+
+
+	strcat(html, "</span></a>\n"
+                     " <a href=\"modes\" class=\"tl no");
+        strcat(html, eModes);
+        strcat(html, "\"><span class=\"t1\">");
+        strcat(html, P21);
+
+
         strcat(html, "</span></a>\n"
                      " <a href=\"ru\" class=\"tl thin no");
         strcat(html, ru);
@@ -638,6 +869,7 @@ static void generate_html_head(char *html, int html_len, http_state* state){
     free(P0);
     free(P1);
     free(P2);
+    free(P21);
     free(P3);
     free(P31);
     free(P41);
@@ -692,6 +924,8 @@ static void generate_html_body_setup(char *html, int html_len, http_state* state
     sprintf(ap_mask,"%d.%d.%d.%d",Setup->wifi_conf.ap_mask[0],Setup->wifi_conf.ap_mask[1],
                                   Setup->wifi_conf.ap_mask[2],Setup->wifi_conf.ap_mask[3]);
 
+   LOG("body init1 done\n");
+
     char ds_acpo[40] = {0};
     char ds_clie[40] = {0};
     char ds_rset[40] = {0};
@@ -703,9 +937,9 @@ static void generate_html_body_setup(char *html, int html_len, http_state* state
     char ds_year[40] = {0};
     char ds_agin[40] = {0};
     char ds_save[20] = {0};
-    char ds_savi[24] = {0};
+    char ds_savi[26] = {0};
     switch(state->language){
-        case enum_lv:     //012345678901234
+        case enum_lv:     //012345678901234567890
             strcpy(ds_acpo,"Piekļuves punkts");
             strcpy(ds_clie,"Klients");
             strcpy(ds_rset,"Pulk. bija atslēgts!");
@@ -748,6 +982,8 @@ static void generate_html_body_setup(char *html, int html_len, http_state* state
             strcpy(ds_savi,"Сохраняет...");
             break;
     }
+
+    LOG("body init2 done\n");
 
     if (!Setup->wifi_conf.wifi_mode){ //AP
         strcat(html, " <a href=\"ap\" class=\"tl no1\">"
@@ -873,9 +1109,9 @@ static void generate_html_body_setup(char *html, int html_len, http_state* state
     strcat(html, ">\n"
                  " <div class=\"clear\"></div>\n"
                  " <button type=\"submit\">");
-    if((Setup->wifi_conf.save >= 1) && (Setup->wifi_conf.save <= 5))
-        strcat(html, ds_savi);
-    else
+    //if((Setup->wifi_conf.save >= 1) && (Setup->wifi_conf.save <= 5))
+    //    strcat(html, ds_savi);
+    //else
         strcat(html, ds_save);
     strcat(html, "</button>\n"
                  "</form>\n");
@@ -954,24 +1190,189 @@ static void generate_html_body_setup(char *html, int html_len, http_state* state
                  "</form>\n");
 }
 
+static void generate_html_body_modes(char *html, int html_len, http_state* state, char *error){
+    char mod_mode[30] = {0};
+    char mod_lap_mode[30] = {0};
+    char mod_gym_mode[30] = {0};
+    char mod_bikes[30] = {0};
+    char mod_save[20] = {0};
+    char mod_bikes_nr[10] = {0};
+    char mod_lap_char[18] = {0};
+    char mod_gym_char[18] = {0};
+
+    if(Setup->modes.mode[0].bikes < 1)
+        Setup->modes.mode[0].bikes = 1;
+    if(Setup->modes.mode[1].bikes < 1)
+        Setup->modes.mode[1].bikes = 1;
+    if(Setup->modes.mode[2].bikes < 1)
+        Setup->modes.mode[2].bikes = 1;
+
+    strcpy(mod_gym_char, "(<u>&#8630;</u>)");
+    strcpy(mod_lap_char, "(&#10226;)");
+
+    switch(state->language){
+        case enum_lv:      //     012345678901
+            strcpy(mod_mode,     "Režīms");
+            strcpy(mod_lap_mode, "Apļa režīms ");
+            strcpy(mod_gym_mode, "Gym. režīms ");
+            strcpy(mod_bikes,    "Motocikli:");
+	    strcpy(mod_save,     "Saglabāt");
+            break;
+        case enum_en:
+            strcpy(mod_mode,     "Mode");
+            strcpy(mod_lap_mode, "Lap mode ");
+            strcpy(mod_gym_mode, "Gym. mode ");
+            strcpy(mod_bikes,    "Bikes:");
+	    strcpy(mod_save,     "Save");
+            break;
+        default:
+            strcpy(mod_mode,     "Режим");
+            strcpy(mod_lap_mode, "Режим круга ");
+            strcpy(mod_gym_mode, "Режим Gym. ");
+            strcpy(mod_bikes,    "Мотоциклы:");
+	    strcpy(mod_save,     "Сохранить");
+            break;
+    }
+
+    strcat(html, "<form id=\"form4\">\n"
+		 " <div class=\"txt\">");
+    strcat(html, mod_mode);
+    strcat(html, " 1</div>\n"
+                 " <div class=\"clear\"></div>\n"
+		 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_lap_mode);
+    strcat(html, mod_lap_char);
+    strcat(html, ":</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_1\" value=\"lap\"");
+    if (!Setup->modes.mode[0].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_gym_mode);
+    strcat(html, mod_gym_char);
+    strcat(html, ":</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_1\" value=\"gym\"");
+    if (Setup->modes.mode[0].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&nbsp;&nbsp;&#8627;&nbsp;");
+    strcat(html, mod_bikes);
+    strcat(html, "</div>\n"
+                 " <input type=\"number\" name=\"mod_bikes_1\" min=\"1\" max=\"10\" value=\"");
+    sprintf(mod_bikes_nr, "%d", Setup->modes.mode[0].bikes);
+    strcat(html, mod_bikes_nr);
+    strcat(html, "\">\n"
+                 " <div class=\"clear\"></div>\n"
+		 " <hr>\n"
+                 " <div class=\"txt\">");
+    strcat(html, mod_mode);
+    strcat(html, " 2</div>\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_lap_mode);
+    strcat(html, mod_lap_char);
+    strcat(html, "</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_2\" value=\"lap\"");
+    if (!Setup->modes.mode[1].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_gym_mode);
+    strcat(html, mod_gym_char);
+    strcat(html, "</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_2\" value=\"gym\"");
+    if (Setup->modes.mode[1].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&nbsp;&nbsp;&#8627;&nbsp;");
+    strcat(html, mod_bikes);
+    strcat(html, "</div>\n"
+                 " <input type=\"number\" name=\"mod_bikes_2\" min=\"1\" max=\"10\" value=\"");
+    sprintf(mod_bikes_nr, "%d", Setup->modes.mode[1].bikes);
+    strcat(html, mod_bikes_nr);
+    strcat(html, "\">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <hr>\n"
+                 " <div class=\"txt\">");
+    strcat(html, mod_mode);
+    strcat(html, " 3</div>\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_lap_mode);
+    strcat(html, mod_lap_char);
+    strcat(html, "</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_3\" value=\"lap\"");
+    if (!Setup->modes.mode[2].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&#8627;&nbsp;");
+    strcat(html, mod_gym_mode);
+    strcat(html, mod_gym_char);
+    strcat(html, "</div>\n"
+                 " <input type=\"radio\" name=\"mod_lap_gym_3\" value=\"gym\"");
+    if (Setup->modes.mode[2].lap_gym)
+        strcat(html, " checked");
+    strcat(html, ">\n"
+                 " <div class=\"clear\"></div>\n"
+                 " <div class=\"txt\">&nbsp;&nbsp;&#8627;&nbsp;");
+    strcat(html, mod_bikes);
+    strcat(html, "</div>\n"
+                 " <input type=\"number\" name=\"mod_bikes_3\" min=\"1\" max=\"10\" value=\"");
+    sprintf(mod_bikes_nr, "%d", Setup->modes.mode[2].bikes);
+    strcat(html, mod_bikes_nr);
+    strcat(html, "\">\n"
+                 " <div class=\"clear\"></div>\n"
+		 "<hr>\n"
+                 " <button type=\"submit\">");
+    strcat(html, mod_save);
+    strcat(html, "</button>\n"
+		 "</form>");
+
+}
+
 static void generate_csv(bool coma, char *html, int html_len, http_state* state){
-  char head[] = "Run;Time\n";
+              //           11111111112222222222333333333344
+              // 012345678901234567890123456789012345678901
+  char head[] = "Id;Lap/Gym;BykeId;Bykes;Time;Referee;Total\n";
   char sep[] = ";";
   if (coma){
-    head[3] = ',';
+    head[2] = ',';
+    head[10] = ',';
+    head[17] = ',';
+    head[23] = ',';
+    head[28] = ',';
+    head[36] = ',';
     sep[0] = ',';
   }
   strcpy(html, head);
   for (int i = 0; i<readings.len; i++){
     if (readings.list[i].value != 0){
-      append_id(html, readings.list[i].id);
+      append_id(html, readings.list[i].id); // ID
+      strcat(html, sep);
+      if(readings.list[i].lapGym == 0) // Lap/Gym
+        strcat(html, "Lap");
+      else
+        strcat(html, "Gym");
+      strcat(html, sep);
+      append_id(html, readings.list[i].bykeNr); // BykeId
+      strcat(html, sep);
+      append_id(html, readings.list[i].bykes); // Bykes
       strcat(html, sep);
 
-      append_val(html, readings.list[i].value);
+      append_val(html, readings.list[i].value); // Time
       strcat(html, sep);
-      if (readings.list[i].referee > 0){
+      if (readings.list[i].referee > 0) // Referee
         append_val(html, readings.list[i].referee);
-      }
+      if (readings.list[i].referee < 0)
+        strcat(html, "bad run");
+      strcat(html, sep);
+      if (readings.list[i].referee > 0) // Referee
+        append_val(html, readings.list[i].value + readings.list[i].referee);
       if (readings.list[i].referee < 0)
         strcat(html, "bad run");
       strcat(html, "\n");
@@ -984,7 +1385,11 @@ static void generate_html(char *html, int html_len, http_state* state, char *err
     generate_html_head(html, html_len, state);
   switch(state->page){
     case enum_setup:
+      LOG("generate setup body\n");
       generate_html_body_setup(html, html_len, state, error);
+      break;
+    case enum_modes:
+      generate_html_body_modes(html, html_len, state, error);
       break;
     case enum_csv_col:
       generate_csv(separator_semicolon, html, html_len, state);
@@ -1002,280 +1407,7 @@ static void generate_html(char *html, int html_len, http_state* state, char *err
 strcat(html,"<div class=\"clear\"></div>\n"
 "</div>\n"
 "</body></html>");
-}
-
-static void decode_ip(uint8_t* ip, char* buf){
-  int i[4] = {0};
-  int id = 0;
-  while(id<4 && ((buf[0] >= '0' && buf[0] <= '9') || buf[0]=='.')){
-    while(buf[0] >= '0' && buf[0] <= '9'){
-      i[id] *= 10;
-      i[id] += buf[0] - '0';
-      buf++;
-      if (i[id] > 255)
-        return;
-    }
-    buf++;
-    id++;
-  }
-  
-  ip[0] = i[0];
-  ip[1] = i[1];
-  ip[2] = i[2];
-  ip[3] = i[3];
-}
-
-static void decode_mac(uint8_t* ip, char* buf){//00:1D:73:55:2D:1D
-  int i[6] = {0};
-  int id = 0;
-  while(id<6 && ((buf[0] >= '0' && buf[0] <= '9') || 
-                 (buf[0] >= 'a' && buf[0] <= 'f') || 
-                 (buf[0] >= 'A' && buf[0] <= 'F') || 
-                 (buf[0]=='%' && buf[1]=='3' && buf[2]=='A'))){
-
-    if (buf[0]=='%' && buf[1]=='3' && buf[2]=='A')
-        buf += 3;
-
-    printf("MAC readed %c%c\n", buf[0], buf[1]);
-    while ((buf[0] >= '0' && buf[0] <= '9') ||
-           (buf[0] >= 'a' && buf[0] <= 'f') || 
-           (buf[0] >= 'A' && buf[0] <= 'F')) {
-      i[id] *= 16;
-      if (buf[0] >= '0' && buf[0] <= '9')
-          i[id] += buf[0] - '0';
-      if (buf[0] >= 'a' && buf[0] <= 'f')
-          i[id] += buf[0] - 'a' + 10;
-      if (buf[0] >= 'A' && buf[0] <= 'F')
-          i[id] += buf[0] - 'A' + 10;
-      printf("%c->%d\n", buf[0], i[id]);
-      buf++;
-      if (i[id] > 255)
-        return;
-    }
-    printf(" %d\n", i[id]);
-    id++;
-  }
-  
-  ip[0] = i[0];
-  ip[1] = i[1];
-  ip[2] = i[2];
-  ip[3] = i[3];
-  ip[4] = i[4];
-  ip[5] = i[5];
-}
-
-int s2i(char* buf){
-  int ret = 0;
-  while(buf[0]>='0' && buf[0]<='9'){
-    ret *= 10;
-    ret += buf[0] - '0';
-    buf++;
-  }
-  return ret;
-}
-
-int s2bcd(char* buf){
-  int ret = 0;
-  while(buf[0]>='0' && buf[0]<='9'){
-    ret *= 16;
-    ret += buf[0] - '0';
-    buf++;
-    printf("%d\n", ret);
-  }
-  return ret;
-}
-
-void parse_setup(char* buf, http_state *state, char *error){
-  bool save_wifi_conf = false;
-  error[0] = 0;
-  while(buf[0]!='?')
-    buf++;
-  buf++;//type=ap&ip=192.168.0.1&gw=192.168.0.1&mask=255.255.255.0&ssid=MGR&password=12345&channel=5&authmode=open&con_limit=4&ip=0.0.0.0&gw=0.0.0.0&mask=0.0.0.0&ssid=&password=&bssid=0-0-0-0-0-0&dhcp=on&bssid=&bssid=&bssid= HTTP/1.1
-  
-  while(buf[0] != 0 && buf[0] != ' '){
-    printf("start\n");
-    bool found = false;
-    int id;
-    int cid;
-    int i;
-    for (id = 0; id < setup_save_str_NR; id++){
-      cid = 0;
-      while (setup_save_str[id][cid] != 0){
-        if (setup_save_str[id][cid] != buf[cid])
-          break;
-        cid++;
-      }
-      if(setup_save_str[id][cid] == 0){
-        found = true;
-        break;
-      }
-    }
-
-    if (!found){
-      while(buf[0]!='&')
-        buf++;
-      buf++;
-      continue;
-    }
-    
-    buf += cid + 1;// jump after "="
-    int year;
-    
-    switch(id+1){
-
-      case enum_setup_ap_ip://ap_ip=192.168.0.1
-           decode_ip(Setup->wifi_conf.ap_ip, buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_gw://ap_gw=192.168.0.1
-           decode_ip(Setup->wifi_conf.ap_gw, buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_mask://ap_mask=255.255.255.0
-           decode_ip(Setup->wifi_conf.ap_mask, buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_ssid://ap_ssid=Lap%20timer
-           for (int i = 0; i<32; i++){
-             Setup->wifi_conf.ap_conf.ssid[i] = buf[i];
-             if(buf[i] == '&'){
-               Setup->wifi_conf.ap_conf.ssid[i] = 0;
-               break;
-             }
-           }
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_password://ap_password=12345
-           for (i = 0; i<32; i++){
-             Setup->wifi_conf.ap_conf.password[i] = buf[i];
-             if(buf[i] == '&'){
-               Setup->wifi_conf.ap_conf.password[i] = 0;
-               break;
-             }
-           }
-           if(i<8){
-               switch(state->language){
-                   case enum_lv://012345678901234
-                       strcat(error, "Kļūda: Parolei jābūt vismaz 8 simboliem garai.");
-                       break;
-                   case enum_en:
-                       strcat(error, "Error: password must be at least 8 characters long.");
-                       break;
-                   case enum_ru:
-                       strcat(error, "Ошыбка: пароль должен быть хотябы в 8 символов.");
-                       break;
-               }
-           }
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_channel://ap_channel=5
-           Setup->wifi_conf.ap_conf.channel = s2i(buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_authmode://ap_authmode=open
-           Setup->wifi_conf.ap_conf.authmode = buf[0]-'0';
-           if(Setup->wifi_conf.ap_conf.authmode == 0)
-             error[0] = 0;
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_con_limit://ap_con_limit=4
-           Setup->wifi_conf.ap_conf.max_connection = s2i(buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ap_hide_ssid://ap_hide_ssid=on
-           if (buf[0] == 'o' && buf[1] == 'n')
-             Setup->wifi_conf.ap_conf.ssid_hidden = true;
-           else
-             Setup->wifi_conf.ap_conf.ssid_hidden = false;
-           save_wifi_conf = true;
-           break;
-      case enum_setup_sta_ssid://sta_ssid=
-           for (i = 0; i<32; i++){
-             Setup->wifi_conf.sta_conf.ssid[i] = buf[i];
-             if(buf[i] == '&' || i == 31){
-               Setup->wifi_conf.sta_conf.ssid[i] = 0;
-               break;
-             }
-           }
-           Setup->wifi_conf.sta_conf.bssid_set = false;
-           save_wifi_conf = true;
-           break;
-      case enum_setup_sta_password://sta_password=
-           for (i = 0; i<32; i++){
-             Setup->wifi_conf.sta_conf.password[i] = buf[i];
-             if(buf[i] == '&' || i == 31){
-               Setup->wifi_conf.sta_conf.password[i] = 0;
-               break;
-             }
-           }
-           save_wifi_conf = true;
-           break;
-      case enum_setup_sta_bssid://sta_bssid=0:0:0:0:0:0
-           decode_mac(Setup->wifi_conf.sta_conf.bssid, buf);
-           save_wifi_conf = true;
-           break;
-      case enum_setup_sta_use_mac://sta_use_mac=on
-           if (buf[0] == 'o' && buf[1] == 'n')
-             Setup->wifi_conf.sta_conf.bssid_set = true;
-           printf("MAC filter ON found\n");
-           save_wifi_conf = true;
-           break;
-      case enum_setup_ds_seconds://ds_sec=
-           printf("HTTP: seconds start\n");
-           Setup->ds_conf.www_busy = true;
-           while(Setup->ds_conf.i2c_busy){
-               // check if both was set at one time
-               if(Setup->ds_conf.i2c_waiting){
-                   break;
-               }
-           }
-           Setup->ds_conf.bcd_seconds = s2bcd(buf);
-           printf("seconds = %02x\n", Setup->ds_conf.bcd_seconds);
-           break;
-      case enum_setup_ds_minutes://ds_min=
-           Setup->ds_conf.bcd_minutes = s2bcd(buf);
-           printf("minutes = %02x\n", Setup->ds_conf.bcd_minutes);
-           break;
-      case enum_setup_ds_hours://ds_hur=
-           Setup->ds_conf.bcd_hour = s2bcd(buf);
-           printf("hours = %02x\n", Setup->ds_conf.bcd_hour);
-           break;
-      case enum_setup_ds_date://ds_dat=
-           Setup->ds_conf.bcd_date = s2bcd(buf);
-           printf("date = %02x\n", Setup->ds_conf.bcd_date);
-           break;
-      case enum_setup_ds_month://ds_mon=
-           Setup->ds_conf.bcd_month = s2bcd(buf);
-           printf("month = %02x\n", Setup->ds_conf.bcd_month);
-           break;
-      case enum_setup_ds_year://ds_yer=
-           year = s2bcd(buf);
-           if(year > 0x2099)
-               Setup->ds_conf.century = true;
-           else
-               Setup->ds_conf.century = false;
-           Setup->ds_conf.bcd_year = year & 0xff;
-           printf("year = %02x, century = %d\n", Setup->ds_conf.bcd_year, Setup->ds_conf.century);
-           break;
-      case enum_setup_ds_aging://ds_age=
-           Setup->ds_conf.aging = s2i(buf);
-           printf("agning = %d\n", Setup->ds_conf.aging);
-           Setup->ds_conf.changed = true;
-           Setup->ds_conf.OSF = false;
-           break;
-      default:
-           break;
-    }
-    while(buf[0]!='&' && buf[0]!=' ')
-      buf++;
-    if (buf[0] == '&')
-      buf++;//ip=192.168.0.1&gw=192.168.0.1&mask=255.255.255.0&ssid=MGR&password=12345&channel=5&authmode=open&con_limit=4&ip=0.0.0.0&gw=0.0.0.0&mask=0.0.0.0&ssid=&password=&bssid=0-0-0-0-0-0&dhcp=on&bssid=&bssid=&bssid= HTTP/1.1
-    printf("end <%c>\n", buf[0]);
-  }
-  if(save_wifi_conf)
-    Setup->wifi_conf.save = 1;
-  printf("HTML: time end changed=%d\n", Setup->ds_conf.changed);
-  Setup->ds_conf.www_busy = false;
+  LOG("generate DONE\n");
 }
 
 static void http_server_netconn_serve(struct netconn *conn, http_state *state)
@@ -1286,13 +1418,13 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
   err_t err;
   char *http_index_page = malloc(100000);
   if (http_index_page == NULL){
-    printf("Error: http_index_page malloc failed.\n");
+    LOG("Error: http_index_page malloc failed.\n");
     return;
   }
   http_index_page[0] = 0;
   char *error = malloc(100);
   if (error == NULL){
-    printf("Error: \"error\" malloc failed.\n");
+    LOG("Error: \"error\" malloc failed.\n");
     return;
   }
   error[0] = 0;
@@ -1300,7 +1432,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
   char *http_user_agent_end;
   char *ajax = malloc(5000);
   if (ajax == NULL){
-    printf("Error: ajax malloc failed.\n");
+    LOG("Error: ajax malloc failed.\n");
     return;
   }
   ajax[0] = 0;
@@ -1321,10 +1453,11 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
              * NETCONN_NOCOPY: our data is const static, so no need to copy it
        */
 
-      printf("buf: <<<%s>>>\n", buf);
+      LOG("buf: <<<%s>>>\n", buf);
 
-      if((strncmp(buf, "GET /ajax", 9) != 0) && (Setup->wifi_conf.save == 0)){
-        Setup->wifi_conf.save = 6;
+      if((strncmp(buf, "GET /clock", 10) != 0) && (strncmp(buf, "GET /ajax", 9) != 0)){
+        LOG("User active\n");
+        Setup->user_active = true;
       }
       if(strncmp(buf, "GET /ru", 7) == 0) {
         state->language = enum_ru;
@@ -1350,12 +1483,20 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
       else if(strncmp(buf, "GET /setup ", 11) == 0) {
         state->page = enum_setup;
       }
+      else if(strncmp(buf, "GET /modes ", 11) == 0) {
+        state->page = enum_modes;
+      }
       else if((strncmp(buf, "GET /setup?", 11) == 0) || 
               (strncmp(buf, "GET /ap?", 8) == 0) ||
               (strncmp(buf, "GET /sta?", 9) == 0)) {
 //GET /setup?type=ap&ip=192.168.0.1&gw=192.168.0.1&mask=255.255.255.0&ssid=MGR&password=12345&channel=5&authmode=open&con_limit=4&ip=0.0.0.0&gw=0.0.0.0&mask=0.0.0.0&ssid=&password=&bssid=0-0-0-0-0-0&dhcp=on&bssid=&bssid=&bssid= HTTP/1.1
         state->page = enum_setup;
         parse_setup(buf, state, error);
+      }
+      else if(strncmp(buf, "GET /modes?", 11) == 0) {
+//GET /modes?mod_en_1=on&mod_lap_gym_1=lap&mod_bikes_1=4&mod_lap_gym_2=gym&mod_bikes_2=4&mod_bikes_3=4 HTTP/1.1
+        state->page = enum_modes;
+        parse_modes(buf, state, error);
       }
       else if(strncmp(buf, "GET /GetCol.csv", 15) == 0) {
         state->page = enum_csv_col;
@@ -1365,7 +1506,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
       }
       else if(strncmp(buf, "GET /jquery.min.js", 18) == 0) {
         state->page = enum_json;
-        printf("HTTP: json request\n");
+        LOG("HTTP: json request\n");
       }// REF_JSON
 
       if(strncmp(buf, "GET /ap", 7) == 0) {
@@ -1375,7 +1516,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
         Setup->wifi_conf.wifi_mode = true;
       }
 
-      printf("HTTP: some mobile preprocessing\n");
+      LOG("HTTP: some mobile preprocessing\n");
       state->mobile = false;
       http_user_agent = strstr(buf, "User-Agent");
       http_user_agent_end = strstr(http_user_agent, "\n");
@@ -1387,24 +1528,24 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
           }
       }
 
-      //printf("HTML: Mobile agent found\n");
+      //LOG("Mobile agent found\n");
 
       if(state->page == enum_csv_col || state->page == enum_csv_coma)
         netconn_write(conn, http_csv_hdr, sizeof(http_csv_hdr)-1, NETCONN_NOCOPY);
       else
         netconn_write(conn, http_html_hdr, sizeof(http_html_hdr)-1, NETCONN_NOCOPY);
 
-      //printf("HTML: Header ready\n");
+      //LOG("Header ready\n");
 
       if(strncmp(buf, "GET /ajax", 9) == 0){
         /* Send out AJAX */
-        printf("AJAX: before processing\n");
+        LOG("AJAX: before processing\n");
         generate_ajax(ajax, readings.list, readings.len, state, readings.timerStep);
         netconn_write(conn, ajax, strlen(ajax), NETCONN_NOCOPY);
       }
       else if(strncmp(buf, "GET /clock", 9) == 0){
         /* Send out AJAX */
-        printf("Clock: before processing\n");
+        LOG("Clock: before processing\n");
         strcat(ajax, "Time: ");
         strcat(ajax, Setup->ds_conf.date_time_ro);
         netconn_write(conn, ajax, strlen(ajax), NETCONN_NOCOPY);
@@ -1423,7 +1564,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
             break;
           }
         }
-        printf("GET: ResetRow %d\n", id);
+        LOG("GET: ResetRow %d\n", id);
       }
       else if(strncmp(buf, "GET /delete", 11) == 0){
         /* Strike out result */
@@ -1439,7 +1580,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
             break;
           }
         }
-        printf("GET: DeleteRow %d\n", id);
+        LOG("GET: DeleteRow %d\n", id);
       }
       else if(strncmp(buf, "GET /plus", 9) == 0){
         /* Strike out result */
@@ -1458,7 +1599,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
             if ((buf[bid] > '9') || (buf[bid] < '0'))
               goodVal = false;
             val = val*10 + (buf[bid] - '0') * 1000;
-            printf("GET: plus value %d to row %d bid is on '%c'\n", val, id, buf[bid]);
+            LOG("GET: plus value %d to row %d bid is on '%c'\n", val, id, buf[bid]);
             bid++;
           }
           if(buf[bid] != ' '){
@@ -1470,7 +1611,7 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
                 goodVal = false;
               val = val + (buf[bid] - '0') * mul;
               mul /= 10;
-              printf("GET: plus value %d to row %d bid is on '%c'\n", val, id, buf[bid]);
+              LOG("GET: plus value %d to row %d bid is on '%c'\n", val, id, buf[bid]);
               bid++;
             }
           }
@@ -1481,85 +1622,57 @@ static void http_server_netconn_serve(struct netconn *conn, http_state *state)
                 break;
               }
             }
-            printf("GET: plus value %d to row %d\n", val, id);
+            LOG("GET: plus value %d to row %d\n", val, id);
           }
-          else
-            printf("GET: plus bad value detected");
+          else{
+            LOG("GET: plus bad value detected");
+	  }
         }
-        else
-          printf("GET: plus value not processed get '%c' on value start", buf[bid]);
+        else{
+          LOG("GET: plus value not processed get '%c' on value start", buf[bid]);
+	}
+      }
+      else if (strncmp(buf, "GET /favicon.ico", 16) == 0) {
+        http_index_page[0] = 0;
+        netconn_write(conn, http_index_page, strlen(http_index_page), NETCONN_NOCOPY);
       }
       else if (strncmp(buf, "GET /GetTime", 12) == 0) {
-        /* Send latest measured time */
-        /*char* timeMeas = malloc(100);
-        if (http_index_page == NULL){
-          printf("Error: GetTime timeMeas malloc failed.\n");
-          return;
-        }
-
-        timeMeas[0] = 0;
-        if (readings.list[0].value != 0){
-          append_id(timeMeas, readings.list[0].id);
-          strcat(timeMeas, "=");
-          append_val(timeMeas, readings.list[0].value);
-
-          append_val(timeMeas, readings.list[0].value);
-          if (readings.list[0].referee > 0){
-            strcat(timeMeas, "(+");
-            append_val(timeMeas, readings.list[0].referee);
-            strcat(timeMeas, ")");
-          }
-          if (readings.list[0].referee < 0)
-            strcat(timeMeas, "(bad run)");
-
-        }
-        else {
-          strcat(timeMeas, "null");
-        }
-        printf("GetTime: timeMeas=\"%s\"\n",timeMeas);
-        netconn_write(conn, timeMeas, strlen(timeMeas), NETCONN_NOCOPY);
-        free(timeMeas);*/
         generate_csv(separator_semicolon, http_index_page, strlen(http_index_page), state);
         netconn_write(conn, http_index_page, strlen(http_index_page), NETCONN_NOCOPY);
       }
       else if (strncmp(buf, "GET /GetStep", 12) == 0) {
         /* Send timer step */
-        char* timeMeas = malloc(10);
+        char* timeMeas = malloc(21);
         if (http_index_page == NULL){
-          printf("Error: GetStep timeMeas malloc failed.\n");
+          LOG("Error: GetStep timeMeas malloc failed.\n");
           return;
         }
         
-        timeMeas[0] = (readings.timerStep % 10) + '0';
-        timeMeas[1] = 0;
+        timeMeas[1] = (readings.timerStep % 10) + '0';
+        timeMeas[0] = readings.timerStep / 10 + '0';
+	timeMeas[2] = 0;
 
-        if (readings.timerStep == 0){
-          strcat(timeMeas, "=START");
+        if (readings.timerStep >= 0 && readings.timerStep <10){
+          strcat(timeMeas, "=START ");
+	  append_id(timeMeas, readings.timerStep + 1);
         }
-        else if (readings.timerStep == 1){
-          strcat(timeMeas, "=BEAM ON START");
-        }
-        else if (readings.timerStep == 2){
-          strcat(timeMeas, "=RUNNING");
-        }
-        else if (readings.timerStep == 3){
-          strcat(timeMeas, "=FINISH");
-        }
-        else if (readings.timerStep == 4){
-          strcat(timeMeas, "=BEAM ON RESET");
+        else if (readings.timerStep >= 10 && readings.timerStep <20){
+          strcat(timeMeas, "=WAIT TO FINISH ");
+	  append_id(timeMeas, readings.timerStep - 9);
         }
 
-        printf("GetStep: timer step=\"%d\"",readings.timerStep);
+        LOG("GetStep: timer step=\"%d\"",readings.timerStep);
         netconn_write(conn, timeMeas, strlen(timeMeas), NETCONN_NOCOPY);
         free(timeMeas);
       }
       else {
         /* Send out HTML page */
-        printf("HTML: Generate html\n");
+        LOG("Generate html\n");
         generate_html(http_index_page, strlen(http_index_page), state, error);
+	LOG("http_index_page size=%d\n", strlen(http_index_page));
         netconn_write(conn, http_index_page, strlen(http_index_page), NETCONN_NOCOPY);
       }
-      //printf("HTML: scan done\n");
+      //LOG("scan done\n");
 
       //gpio_set_level(LED_BUILTIN, 0);
     }
@@ -1592,6 +1705,7 @@ void http_server(void *pvParameters)
      if (err == ERR_OK) {
          http_server_netconn_serve(newconn, &state);
          netconn_delete(newconn);
+	 LOG("cycle done\n");
      }
   } while(err == ERR_OK);
   netconn_close(conn);

@@ -34,8 +34,29 @@
 #include "esp_spi_flash.h"
 #include "structures.h"
 #include "driver/gpio.h"
+#include "fn_defs.h"
 //#include "rom/crc.h"
 //#include "esp_heap_alloc_caps.h"
+
+#define PART_STR "SPI (%d): "
+#define LOG(str, ... ) printf(PART_STR, xTaskGetTickCount());\
+                       printf(str, ##__VA_ARGS__)
+
+#define READ_NONE 0
+#define READ_INIT 1
+#define READ_MEASURE 2
+
+#define WRITE_NONE 0
+#define WRITE_INIT 1
+#define WRITE_MODES 2
+
+#define BIT_USER_ACTIVE 0
+#define BIT_WIFI_CONNECTED 1
+
+typedef struct{
+   uint16_t sentCRC[3];
+   uint8_t sentSCMD[2];
+} exchange_type;
 
 /*
 SPI receiver (slave) example.
@@ -67,9 +88,12 @@ spi_slave_interface_config_t slvcfg;
 gpio_config_t io_conf;
 char *TXbuf;
 char *RXbuf;
-spi_slave_transaction_t t;
+spi_slave_transaction_t transaction;
 uint16_t run_counter;
-
+int showed_bikes;
+int prevModeType;
+int prevMode;
+bool modeTypeChanged;
 
 //Called after a transaction is queued and ready for pickup by master. We use this to set the handshake line high.
 void my_post_setup_cb(spi_slave_transaction_t *trans) {
@@ -125,376 +149,228 @@ bool SPI_init(){
     gpio_set_pull_mode(CONFIG_SPI_CLK_PIN, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(CONFIG_SPI_CS_PIN, GPIO_PULLUP_ONLY);
 
-    printf("AJ data ready starting INIT\n");
+    LOG("data ready starting INIT\n");
     //Initialize SPI slave interface
     ret=spi_slave_initialize(HSPI_HOST, &buscfg, &slvcfg, 1);
     if (ret!=ESP_OK){
-        printf("SPI Error: INIT returned.\n%d", ret);
+        LOG("Error: INIT returned.\n%d", ret);
         return FN_ERR;
     }
 
-    printf("AJ SPI initialized, preparing data.\n");
-    memset(&t, 0, sizeof(t));
-    t.tx_buffer=TXbuf;
-    t.rx_buffer=RXbuf;
+    LOG("SPI initialized, preparing data.\n");
+    memset(&transaction, 0, sizeof(transaction));
+    transaction.tx_buffer=TXbuf;
+    transaction.rx_buffer=RXbuf;
     memset(RXbuf, 8, 33);
 
     return FN_OK;
 }
 
 //Read AP data via SPI and store it to WiFiSetup via pointer
-void readAP1(){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[47] + (RXbuf[48]<<8);
-    uint16_t cal = crc16(RXbuf, 47);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
+void readInit(){
+    Setup->modes.mode[0].lap_gym = (RXbuf[1] & (1<<0)) != 0;
+    Setup->modes.mode[1].lap_gym = (RXbuf[1] & (1<<1)) != 0;
+    Setup->modes.mode[2].lap_gym = (RXbuf[1] & (1<<2)) != 0;
 
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
-        return;
+    for(int i = 0; i<3; i++){
+        Setup->modes.mode[i].bikes = RXbuf[i+2];
+        if(Setup->modes.mode[i].bikes < 1)
+            Setup->modes.mode[i].bikes = 1;
+        if(Setup->modes.mode[i].bikes > 10)
+            Setup->modes.mode[i].bikes = 10;
     }
 
-    //decode received bits
-    Setup->wifi_conf.wifi_mode = (RXbuf[1] & (1<<0)) == 0;
-    Setup->wifi_conf.ap_conf.ssid_hidden = (RXbuf[1]>>1) & 1; //T->0 (broadcast)/F->1 (hide)
-    Setup->wifi_conf.ap_conf.authmode = (RXbuf[1]>>2) & 7; //3 bits
-    Setup->wifi_conf.ap_conf.max_connection = ((RXbuf[1]>>5) & 3) + 1; //2 bits 1..4
-    printf("AP state=\"%d\", %d\n", RXbuf[1], Setup->wifi_conf.wifi_mode);
-
-    //receive Channel
-    Setup->wifi_conf.ap_conf.channel = RXbuf[2];
-
-    //receive SSID
-    memcpy(Setup->wifi_conf.ap_conf.ssid, &RXbuf[3], 32);
-
-    //receive IP
-    memcpy(Setup->wifi_conf.ap_ip, &RXbuf[35], 4);
-
-    //receive GW
-    memcpy(Setup->wifi_conf.ap_gw, &RXbuf[39], 4);
-
-    //receive Mask
-    memcpy(Setup->wifi_conf.ap_mask, &RXbuf[43], 4);
-
-    //Set default beacon interval
-    Setup->wifi_conf.ap_conf.beacon_interval = 100;
-
-    //bad data received. Reset to default.
-    if (RXbuf[3] == 0xFF){
-        printf("resetting to default AP\n");
-        Setup->wifi_conf.wifi_mode = false; // AP mode
-        Setup->wifi_conf.ap_conf.ssid_hidden = 0; // Broadcast SSID
-        Setup->wifi_conf.ap_conf.authmode = 0;
-        Setup->wifi_conf.ap_conf.max_connection = 4;
-        Setup->wifi_conf.ap_conf.channel = 1;
-        Setup->wifi_conf.ap_conf.ssid[0] = 'M';
-        Setup->wifi_conf.ap_conf.ssid[1] = 'G';
-        Setup->wifi_conf.ap_conf.ssid[2] = 'R';
-        Setup->wifi_conf.ap_conf.ssid[3] = 0;
-        Setup->wifi_conf.ap_ip[0] = 192;
-        Setup->wifi_conf.ap_ip[1] = 168;
-        Setup->wifi_conf.ap_ip[2] = 0;
-        Setup->wifi_conf.ap_ip[3] = 1;
-        Setup->wifi_conf.ap_gw[0] = 192;
-        Setup->wifi_conf.ap_gw[1] = 168;
-        Setup->wifi_conf.ap_gw[2] = 0;
-        Setup->wifi_conf.ap_gw[3] = 1;
-        Setup->wifi_conf.ap_mask[0] = 255;
-        Setup->wifi_conf.ap_mask[1] = 255;
-        Setup->wifi_conf.ap_mask[2] = 255;
-        Setup->wifi_conf.ap_mask[3] = 0;
+    if((RXbuf[1] & (1<<7)) != 0){ // reset config
+        nvs_reset_wifi_conf();
+	LOG("reset config\n");
     }
-    printf("AP channel=\"%d\"\n", Setup->wifi_conf.ap_conf.channel);
-    printf("AP SSID=\"%s\"\n", Setup->wifi_conf.ap_conf.ssid);
-    printf("AP IP=%d.%d.%d.%d\n", Setup->wifi_conf.ap_ip[0], 
-                                  Setup->wifi_conf.ap_ip[1], 
-                                  Setup->wifi_conf.ap_ip[2], 
-                                  Setup->wifi_conf.ap_ip[3]);
-    printf("AP GW=%d.%d.%d.%d\n", Setup->wifi_conf.ap_gw[0],
-                                  Setup->wifi_conf.ap_gw[1], 
-                                  Setup->wifi_conf.ap_gw[2], 
-                                  Setup->wifi_conf.ap_gw[3]);
-    printf("AP Mask=%d.%d.%d.%d\n", Setup->wifi_conf.ap_mask[0],
-                                    Setup->wifi_conf.ap_mask[1],
-                                    Setup->wifi_conf.ap_mask[2],
-                                    Setup->wifi_conf.ap_mask[3]);
-
-
-    //reply by CRC16
-    TXbuf[0] = RXbuf[47];
-    TXbuf[1] = RXbuf[48];
 }
 
-//Read AP data via SPI and store it to WiFiSetup via pointer
-void readAP2(){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[65] + (RXbuf[66]<<8);
-    uint16_t cal = crc16(RXbuf, 65);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
-
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
-        return;
+void shiftDn(int add){
+    int next = run_counter + add;
+    if(next > readings.len)
+        next = readings.len;
+    for (int i = next-1; i>=add; i--){
+        readings.list[i].id = readings.list[i-add].id;
+        readings.list[i].lapGym = readings.list[i-add].lapGym;
+        readings.list[i].bykeNr = readings.list[i-add].bykeNr;
+	readings.list[i].bykes = readings.list[i-add].bykes;
+        readings.list[i].value = readings.list[i-add].value;
+        readings.list[i].referee = readings.list[i-add].referee;
     }
-
-    if (RXbuf[1] == 0xFF){
-        //receive PW
-        Setup->wifi_conf.ap_conf.password[0] = '1';
-        Setup->wifi_conf.ap_conf.password[1] = '2';
-        Setup->wifi_conf.ap_conf.password[2] = '3';
-        Setup->wifi_conf.ap_conf.password[3] = '4';
-        Setup->wifi_conf.ap_conf.password[4] = '5';
-        Setup->wifi_conf.ap_conf.password[5] = '6';
-        Setup->wifi_conf.ap_conf.password[6] = '7';
-        Setup->wifi_conf.ap_conf.password[7] = '8';
-        Setup->wifi_conf.ap_conf.password[8] = 0;
+    for (int i = add-1; i>=0; i--){
+    	readings.list[i].id = readings.list[i + 1].id + 1;
     }
-    else
-        memcpy(Setup->wifi_conf.ap_conf.password, &RXbuf[1], 64);
-
-    //reply by CRC16
-    TXbuf[0] = RXbuf[65];
-    TXbuf[1] = RXbuf[66];
+    run_counter += add;
 }
 
-//Read STA1 data via SPI and store it to WiFiSetup via pointer
-void readSTA1(){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[40] + (RXbuf[41]<<8);
-    uint16_t cal = crc16(RXbuf, 40);
-    printf("\nCRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
-
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
-        return;
+void shiftUp(){
+    for (int i = 0; i<readings.len-1; i++){
+        readings.list[i].id = readings.list[i+1].id;
+        readings.list[i].lapGym = readings.list[i+1].lapGym;
+        readings.list[i].bykeNr = readings.list[i+1].bykeNr;
+	readings.list[i].bykes = readings.list[i+1].bykes;
+        readings.list[i].value = readings.list[i+1].value;
+        readings.list[i].referee = readings.list[i+1].referee;
     }
-
-    //decode received bits
-    Setup->wifi_conf.wifi_mode = (RXbuf[1] & (1<<0)) == 1;
-    Setup->wifi_conf.sta_conf.bssid_set = (RXbuf[1]>>1) & 1;
-    printf("STA state=\"%d\", %d\n", RXbuf[1], Setup->wifi_conf.wifi_mode);
-
-    //receive SSID
-    memcpy(Setup->wifi_conf.sta_conf.ssid, &RXbuf[2], 32);
-
-    //receive BSSID
-    memcpy(Setup->wifi_conf.sta_conf.bssid, &RXbuf[34], 6);
-
-    if (RXbuf[2] == 0xFF){
-        Setup->wifi_conf.wifi_mode = false;
-        Setup->wifi_conf.sta_conf.bssid_set = false;
-        Setup->wifi_conf.sta_conf.ssid[0] = 0;
-        Setup->wifi_conf.sta_conf.bssid[0] = 0;
-    }
-
-    printf("STA SSID=\"%s\"\n", Setup->wifi_conf.sta_conf.ssid);
-
-    //reply by CRC16
-    TXbuf[0] = RXbuf[40];
-    TXbuf[1] = RXbuf[41];    
-}
-
-//Read STA2 data via SPI and store it to WiFiSetup via pointer
-void readSTA2(){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[65] + (RXbuf[66]<<8);
-    uint16_t cal = crc16(RXbuf, 65);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
-
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
-        return;
-    }
-
-    //receive PW
-    memcpy(Setup->wifi_conf.sta_conf.password, &RXbuf[1], 64);
-
-    //reply by CRC16
-    TXbuf[0] = RXbuf[65];
-    TXbuf[1] = RXbuf[66];
-    
-    //set initialized state
-    Setup->wifi_conf.wifi_init = true;
-    printf("SPI: Wifi setup readed. Init Enabled\n");
-}
-
-//Read Mode
-void readMode(){
-}
-
-//Read Mode
-void readModeID(){
+    run_counter--;
 }
 
 //Read new measurement of driver
 void readMeas(int8_t *timerStep){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[5] + (RXbuf[6]<<8);
-    uint16_t cal = crc16(RXbuf, 5);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
-
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
+    if (readings.len==0)
         return;
+
+    // RXbuf[0] - MCMDsetNewTime
+    // RXbuf[1] - Mode Nr
+    // RXbuf[2] - mode type Lap(0)/Gym(1)
+    // RXbuf[3] - measured (Lap mode)/Bikes count (Gym mode)
+    // RXbuf[4] - Step Nr (0..9 start running/ 10..19 stopping)
+    // RXbuf[5..8]   - measurement 1
+    // RXbuf[..]     - other measurements
+    // RXbuf[41..44] - measurement 10
+
+    if((RXbuf[1] != prevMode) && ((*timerStep != 0) || ((prevModeType == 0) && !modeTypeChanged))){
+        shiftUp();
     }
 
-    //reply by CRC16
-    TXbuf[0] = RXbuf[5];
-    TXbuf[1] = RXbuf[6];
-
-    if (readings.len==0){
-        return;
+    LOG("Step=%d, Prev=%d, sh_bik=%d", RXbuf[4], *timerStep, showed_bikes);
+    if((RXbuf[4] < *timerStep) && (RXbuf[1] == prevMode)){ // Last bike finished. start again
+        for(int i=0; i<(showed_bikes - (*timerStep - 10)); i++){
+            int adr = (showed_bikes - i - 1)*4;
+            readings.list[i].value = RXbuf[5+adr] + (RXbuf[6+adr]<<8) +
+                                     (RXbuf[7+adr]<<16) + (RXbuf[8+adr]<<24);
+        }
+        showed_bikes = 0;
     }
 
-    for (int i = readings.len-1; i>0; i--){
-        readings.list[i].id = readings.list[i-1].id;
-        readings.list[i].value = readings.list[i-1].value;
-        readings.list[i].referee = readings.list[i-1].referee;
+    if(RXbuf[2] == 0){
+        if(RXbuf[3] == 1){ // new measurement has arrived
+            shiftDn(1);
+            readings.list[1].lapGym = 0;
+            readings.list[1].bykeNr = 1;
+	    readings.list[1].bykes = 1;
+            readings.list[1].value = RXbuf[9] + (RXbuf[10]<<8) +
+                                     (RXbuf[11]<<16) + (RXbuf[12]<<24);
+	    readings.list[0].referee = 0; // new entry must have default referee value
+        }
+
+        if((RXbuf[5] + (RXbuf[6]<<8) + (RXbuf[7]<<16) + (RXbuf[8]<<24)) > 0){ // wait first meas.
+            if(modeTypeChanged){
+                modeTypeChanged = false;
+                shiftDn(1);
+                readings.list[0].referee = 0;
+            }
+            readings.list[0].lapGym = 0;
+            readings.list[0].bykeNr = 1;
+	    readings.list[0].bykes = 1;
+            readings.list[0].value = RXbuf[5] + (RXbuf[6]<<8) +
+                                     (RXbuf[7]<<16) + (RXbuf[8]<<24);
+        }
+    }else{
+        modeTypeChanged = true;
+        // if mode is stopping, stopping bikes can be read from max bikes for current mode
+        if(RXbuf[4] < 10){//step is not in stopping part.
+            // if STEP = last_bike_nr + N, then N readings must be added
+            // if STEP < last_bike_nr, then new run sequence is here and
+            //   we have to add STEP count of readings (theoteticaly, STEP will be increasing by 1)
+            int step = RXbuf[4];
+
+            if( showed_bikes <= step ){
+                // shift down measured values
+                int add = step - showed_bikes;
+                shiftDn(add);
+
+                // add new measurements and update old
+                for(int i=step-1; i>=0; i--){
+                    readings.list[i].lapGym = 1;
+                    readings.list[i].bykeNr = step - i;
+		    readings.list[i].bykes = RXbuf[3];
+                    int adr = (step - 1 - i) * 4;
+                    readings.list[i].value = RXbuf[5+adr] + (RXbuf[6+adr]<<8) +
+                                             (RXbuf[7+adr]<<16) + (RXbuf[8+adr]<<24);
+                    // reset referee params only for new entries
+                    if(i < add)
+                        readings.list[i].referee = 0;
+                }
+                showed_bikes = step;
+            }else{ // if(step < showed_bikes)
+                // new lap started
+                shiftDn(step);
+                for(int i=0; i<step; i++){
+                    readings.list[i].lapGym = 1;
+                    readings.list[i].bykeNr = i;
+		    readings.list[i].bykes = RXbuf[3];
+                    int adr = (step - 1 - i) * 4;
+                    readings.list[i].value = RXbuf[5+adr] + (RXbuf[6+adr]<<8) +
+                                             (RXbuf[7+adr]<<16) + (RXbuf[8+adr]<<24);
+                    readings.list[i].referee = 0;
+                }
+                showed_bikes = step;
+            }
+        }else{ // stopping part. Simply update all runs
+            int bikes = RXbuf[3];
+            if(showed_bikes < bikes){
+                shiftDn(bikes - showed_bikes);
+                for(int i=0; i<(bikes - showed_bikes); i++){
+                    readings.list[i].lapGym = 1;
+                    readings.list[i].bykeNr = bikes - i;
+		    readings.list[i].bykes = RXbuf[3];
+                    readings.list[i].referee = 0;
+                }
+	        showed_bikes = bikes;
+            }
+	    for(int i=0; i<bikes; i++){
+                readings.list[bikes - i - 1].value = RXbuf[5+i*4] + (RXbuf[6+i*4]<<8) +
+                                                     (RXbuf[7+i*4]<<16) + (RXbuf[8+i*4]<<24);
+            }
+        }
     }
-
-    readings.list[0].id = run_counter;
-    run_counter ++;
-
-    readings.list[0].value = RXbuf[1] + (RXbuf[2]<<8) + (RXbuf[3]<<16) + (RXbuf[4]<<24);
-    readings.list[0].referee = 0;
-    *timerStep = 3;
-    printf("readMeas: %d - %d", readings.list[0].id, readings.list[0].value);
+    prevModeType = RXbuf[2];
+    prevMode = RXbuf[1];
+    *timerStep = RXbuf[4];
+    LOG("val[0]=%d, val[1]=%d, val[2]=%d, val[3]=%d\n", readings.list[0].value, 
+                                                        readings.list[1].value, 
+                                                        readings.list[2].value, 
+                                                        readings.list[3].value);
 }
 
-void readSCMD(int8_t *timerStep){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[2] + (RXbuf[3]<<8);
-    uint16_t cal = crc16(RXbuf, 2);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
-
-    if (rec != cal){
-        TXbuf[63] = 0;
-        TXbuf[64] = 0;
-        return;
-    }
-
-    *timerStep = (int8_t)RXbuf[1];
-    
-    //reply by CRC16
-    TXbuf[63] = RXbuf[2];
-    TXbuf[64] = RXbuf[3];
-
-    uint16_t retCRC = 0;
-    TXbuf[0] = 0; //ESP has nothing to do.
-
-    if(Setup->wifi_conf.wifi_init != true){
-        printf("SPI SCMD: requesting re-init\n");
-        TXbuf[0] = 1; //ESP has been reset.
-    }
-    else if(Setup->wifi_conf.save == 1){
-        printf("SPI SCMD: requesting SaveData AP1\n");
-        TXbuf[0] = 2; //User has pressed "save" AP1.
-
-       //decode received bits
-       TXbuf[1] = (Setup->wifi_conf.wifi_mode == false) & 1;
-       TXbuf[1] |= Setup->wifi_conf.ap_conf.ssid_hidden<<1; //T->0 (broadcast)/F->1 (hide)
-       TXbuf[1] |= (Setup->wifi_conf.ap_conf.authmode & 7)<<2;//3 bits
-       TXbuf[1] |= ((Setup->wifi_conf.ap_conf.max_connection-1) & 3)<<5; //2 bits 1..4
-
-       printf("mode=%d, ssid hide=%d, auth mode=%d, max con=%d\n", 
-              Setup->wifi_conf.wifi_mode, Setup->wifi_conf.ap_conf.ssid_hidden,
-              Setup->wifi_conf.ap_conf.authmode, Setup->wifi_conf.ap_conf.max_connection);
-
-       //receive Channel
-       TXbuf[2] = Setup->wifi_conf.ap_conf.channel;
-
-       //receive SSID
-       memcpy(&TXbuf[3], Setup->wifi_conf.ap_conf.ssid, 32);
-
-       //receive IP
-       memcpy(&TXbuf[35], Setup->wifi_conf.ap_ip, 4);
-
-       //receive GW
-       memcpy(&TXbuf[39], Setup->wifi_conf.ap_gw, 4);
-
-       //receive Mask
-       memcpy(&TXbuf[43], Setup->wifi_conf.ap_mask, 4);
-    }
-    else if(Setup->wifi_conf.save == 2){
-        printf("SPI SCMD: requesting SaveDataAP2\n");
-        TXbuf[0] = 3; //User has pressed "save" AP1.
-
-        //receive PW
-        memcpy(&TXbuf[1], Setup->wifi_conf.ap_conf.password, 64);
-    }
-    else if(Setup->wifi_conf.save == 3){
-        printf("SPI SCMD: requesting SaveDataSTA1\n");
-        TXbuf[0] = 4; //User has pressed "save" AP1.
-
-        //decode received bits
-        TXbuf[1] = Setup->wifi_conf.wifi_mode & 1;
-        TXbuf[1] |= (Setup->wifi_conf.sta_conf.bssid_set & 1) << 1;
-
-        //receive SSID
-        memcpy(&TXbuf[2], Setup->wifi_conf.sta_conf.ssid, 32);
-
-        //receive BSSID
-        memcpy(&TXbuf[34], Setup->wifi_conf.sta_conf.bssid, 6);
-    }
-    else if(Setup->wifi_conf.save == 4){
-        printf("SPI SCMD: requesting SaveDataSTA2\n");
-        TXbuf[0] = 5; //User has pressed "save" AP1.
-
-        //receive PW
-        memcpy(&TXbuf[1], Setup->wifi_conf.sta_conf.password, 64);
-    }
-    else if(Setup->wifi_conf.save == 6){
-        printf("SPI SCMD: sending User Active\n");
-        TXbuf[0] = 6; //User Active
-    }
-    else if(Setup->wifi_conf.save == 7){
-        printf("SPI SCMD: sending connected to WiFi/AP started\n");
-        TXbuf[0] = 7; //User Active
-    }
-
-    retCRC = crc16(TXbuf, 63);
-    TXbuf[65] = (uint8_t)retCRC;
-    TXbuf[66] = (uint8_t)(retCRC>>8);
-
-    printf("SPI: SCMD sending:");
-    for (int i=0; i<67; i++){
-        printf(" %X", TXbuf[i]);
-    }
-    printf("\n");
+void writeNone(){
+    //nothing much to do...
+    TXbuf[0] = WRITE_NONE;
 }
 
-void readDEBUG(){
-    //prepare CRC in reply
-    uint16_t rec = RXbuf[65] + (RXbuf[66]<<8);
-    uint16_t cal = crc16(RXbuf, 65);
-    printf("CRC received=%d\n", rec);
-    printf("CRC calculated=%d\n\n", cal);
+void writeInit(){
+    TXbuf[0] = WRITE_INIT;
+    //TXbuf[1] is status byte and it is define in this process main loop
+    TXbuf[2] = Setup->wifi_conf.wifi_mode;
+    // send actual SSID
+    if(!Setup->wifi_conf.wifi_mode)
+        memcpy(&TXbuf[3], Setup->wifi_conf.ap_conf.ssid, 32);
+    else
+        memcpy(&TXbuf[3], Setup->wifi_conf.sta_conf.ssid, 32);
+}
 
-    if (rec != cal){
-        TXbuf[0] = 0;
-        TXbuf[1] = 0;
-        printf("SPI warning: CRC error\n");
+void writeModes(){
+    TXbuf[0] = WRITE_MODES;
+    //TXbuf[1] is status byte and it is define in this process main loop
+    TXbuf[2] = 0;
+    TXbuf[4] = 0;
+    TXbuf[6] = 0;
+    if(Setup->modes.mode[0].lap_gym){
+        TXbuf[2] = 1;
     }
+    TXbuf[5] = Setup->modes.mode[0].bikes;
 
-    TXbuf[0] = RXbuf[65];
-    TXbuf[1] = RXbuf[66];
-    
-    printf("SPI: DEBUG received:");
-    for (int i=0; i<67; i++){
-        printf(" %X", RXbuf[i]);
+    if(Setup->modes.mode[1].lap_gym){
+        TXbuf[3] = 1;
     }
-    printf("\n");
+    TXbuf[6] = Setup->modes.mode[1].bikes;
+
+    if(Setup->modes.mode[2].lap_gym){
+        TXbuf[4] = 1;
+    }
+    TXbuf[7] = Setup->modes.mode[2].bikes;
 }
 
 //Main application
@@ -503,25 +379,56 @@ void spi_slave(void *parSetup)
     esp_err_t ret;
     Setup = parSetup;
     run_counter = 0;
+    showed_bikes = 0;
+    prevModeType = -1;
+    prevMode = 0;
+    uint8_t repeatSCMD;
+    exchange_type exchg;
+    bool initSent = false;
+    modeTypeChanged = false;
+
+    // init "exchg"
+    for(int i=0; i<3; i++){
+        exchg.sentCRC[i] = 0;
+        exchg.sentSCMD[i] = 0;
+    }
+
     RXbuf = malloc(67);
     if (RXbuf == NULL){
-      printf("Error: RXbuf malloc failed.\n");
+      LOG("Error: RXbuf malloc failed.\n");
       return;
     }
     TXbuf = malloc(67);
     if (TXbuf == NULL){
-      printf("Error: TXbuf malloc failed.\n");
+      LOG("Error: TXbuf malloc failed.\n");
       free(RXbuf);
       return;
     }
 
-    printf("AJ starting init\n");
+    LOG("starting init\n");
     if (SPI_init() == FN_ERR)
         return;
 
+    if (readings.len == 0){
+        readings.len = 500;
+        readings.list = malloc(sizeof(reading_type[readings.len]));
+        if (readings.list == NULL){
+            LOG("Error: readings.list malloc failed.\n");
+        }
+        //generate readings.list
+        for (int i = 0; i<readings.len; i++){
+            readings.list[i].id = 0;
+	    readings.list[i].lapGym = 0;
+	    readings.list[i].bykeNr = 0;
+	    readings.list[i].bykes = 0;
+            readings.list[i].value = 0;
+            readings.list[i].referee = 0;
+        }
+    }
+
     while(1) {
         //Set up a transaction of data
-        t.length=8*67;
+        transaction.length=8*67;
 
         /* This call enables the SPI slave interface to send/receive to the sendbuf and recvbuf. The transaction is
         initialized by the SPI master, however, so it will not actually happen until the master starts a hardware transaction
@@ -531,96 +438,92 @@ void spi_slave(void *parSetup)
         */
 
         RXbuf[0] = 0;
-        ret=spi_slave_transmit(HSPI_HOST, &t, portMAX_DELAY);
-        assert(ret==ESP_OK);
-        printf("SPI received:\n");
-        printf("SPI wifi->Save = %d\n", Setup->wifi_conf.save);
+
+	// show SENT values
+	for (int i=0; i<67; i++){
+            printf(" %X", TXbuf[i]);
+        }
+        printf("\n");
+
+        // exchange data
+	ret=spi_slave_transmit(HSPI_HOST, &transaction, portMAX_DELAY);
         
-        switch(RXbuf[0]){
-            case 1:
-                printf("AJ reading AP1 config\n");
-                readAP1();
-                break;
-            case 2:
-                printf("AJ reading AP2 config\n");
-                readAP2();
-                break;
-            case 3:
-                printf("AJ reading STA1 config\n");
-                readSTA1();
-                break;
-            case 4:
-                printf("AJ reading STA2 config\n");
-                readSTA2();
-                break;
-            case 5:
-                printf("AJ reading Modes config\n");
-                readMode();
-                break;
-            case 6:
-                printf("AJ reading Mode ID\n");
-                readModeID();
-                break;
-            case 7:
-                printf("AJ reading Meas value\n");
-                readMeas(&readings.timerStep);
-                break;
-            case 128:
-                printf("AJ SCMD request received\n");
-                readSCMD(&readings.timerStep);
+	// show RECEIVED values
+	for (int i=0; i<67; i++){
+            printf(" %X", RXbuf[i]);
+        }
+        printf("\n");
 
-                if (readings.len == 0){
-                    readings.len = 500;
-                    readings.list = malloc(sizeof(reading_type[readings.len]));
-                    if (readings.list == NULL){
-                      printf("Error: readings.list malloc failed.\n");
-                      break;
-                    }
-                    //generate readings.list
-                    for (int i = 0; i<readings.len; i++){
-                        readings.list[i].id = 0;
-                        readings.list[i].value = 0;
-                        readings.list[i].referee = 0;
-                    }
-                }
+        assert(ret==ESP_OK);
+        LOG("received: %d\n", RXbuf[0]);
 
-                break;
-            case 129:
-                printf("AJ SCMD AP1 ack received\n");
-                Setup->wifi_conf.save = 2;
-                break;
-            case 130:
-                printf("AJ SCMD AP2 ack received\n");
-                Setup->wifi_conf.save = 3;
-                break;
-            case 131:
-                printf("AJ SCMD STA1 ack received\n");
-                Setup->wifi_conf.save = 4;
-                break;
-            case 132:
-                printf("AJ SCMD STA2 ack received\n");
-                Setup->wifi_conf.save = 0; 
-                esp_restart();
-                break;
-            case 133:
-                printf("AJ SCMD user active ack received\n");
-                Setup->wifi_conf.save = 0;
-                break;
-            case 134:
-                printf("AJ SCMD WiFi Done ack received\n");
-                Setup->wifi_conf.save = 0;
-                break;
-            case 255:
-                printf("AJ DEBUG request received\n");
-                readDEBUG();
-                break;
-            default:
-                TXbuf[0] = 0;
-                TXbuf[1] = 0;
-                break;
+        //prepare CRC in reply
+        uint16_t rec = RXbuf[65] + (RXbuf[66]<<8);
+        uint16_t cal = crc16(RXbuf, 65);
+        LOG("CRC received=%d\n", rec);
+        LOG("CRC calculated=%d\n\n", cal);
+        TXbuf[63] = (uint8_t)cal;
+        TXbuf[64] = (uint8_t)(cal>>8);
+
+	// If received data is consistent, process it
+	if(rec == cal){
+            switch(RXbuf[0]){
+                case READ_INIT: // MCMDsetModes
+                    LOG("reading config init\n");
+                    readInit();
+                    Setup->init = true;
+                    break;
+                case READ_MEASURE: // MCMDsetNewTime
+                    LOG("reading Meas value\n");
+                    readMeas(&readings.timerStep);
+                    break;
+                default: // MCMDnothing and other unnown commands also READ_NONE
+                    LOG("nothing to do");
+                    break;
+            }
+	}
+
+        repeatSCMD = 0;
+        if(((uint16_t)(RXbuf[63] + (RXbuf[64]<<8)) != exchg.sentCRC[2]) && 
+	              (exchg.sentSCMD != WRITE_NONE)){
+            repeatSCMD = exchg.sentSCMD[2];
+        }
+
+        // Prepare output data
+        if(!initSent || repeatSCMD == WRITE_INIT){
+            writeInit();
+	    initSent = true;
+        }
+        else if(Setup->modes.save || repeatSCMD == WRITE_MODES){
+            writeModes();
+        }
+        else
+            writeNone();
+
+        uint8_t status = 0;
+        if(Setup->modes.save || Setup->user_active){
+            status |= 1<<BIT_USER_ACTIVE;
+	    Setup->user_active = false;
+        }
+        if(Setup->wifi_conf.wifi_connected){
+            status |= 1<<BIT_WIFI_CONNECTED;
+        }
+        TXbuf[1] = status;
+
+	// send CRC of data that is transmitted
+        uint16_t CRC = crc16(TXbuf, 65);
+        TXbuf[65] = (uint8_t)CRC;
+        TXbuf[66] = (uint8_t)(CRC>>8);
+
+	exchg.sentCRC[0] = CRC;
+	exchg.sentSCMD[0] = TXbuf[0];
+
+        for(int i=2; i>0; i--){
+            exchg.sentCRC[i] = exchg.sentCRC[i-1];
+	    exchg.sentSCMD[i] = exchg.sentSCMD[i-1];
         }
     }
-    printf("SPI: freeing RX/TX buffers\n");
+    LOG("freeing RX/TX buffers\n");
     free(TXbuf);
     free(RXbuf);
 }
