@@ -19,7 +19,7 @@ config WIFI_MODE
 
 config AP_SSID
     string "Access point SSID"
-        default "MotoGym"
+        default "LapTimer"
         help
                 Name of access point WiFi (SSID) [32].
 
@@ -123,14 +123,14 @@ config STA_BSSID
 config SPI_MISO_PIN
     int "SPI MISO pin"
 	range 0 35
-	default 25
+	default 23
 	help
 		GPIO number (IOxx) for MISO pin.
 
 config SPI_MOSI_PIN
     int "SPI MOSI pin"
 	range 0 35
-	default 23
+	default 25
 	help
 		GPIO number (IOxx) for MOSI pin.
 
